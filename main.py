@@ -84,8 +84,18 @@ def _write_cookie_file(cookie_header: str) -> str | None:
         if not name:
             continue
         # domain  subdom  path  secure  expiry  name  value
-        # We apply cookies to both instagram.com and facebook.com domains
-        for domain in [".instagram.com", ".facebook.com", ".fb.com"]:
+        # Apply cookies across all supported platform domains
+        for domain in [
+            ".instagram.com",
+            ".facebook.com",
+            ".fb.com",
+            ".youtube.com",
+            ".google.com",
+            ".youtu.be",
+            ".tiktok.com",
+            ".twitter.com",
+            ".x.com",
+        ]:
             lines.append(
                 f"{domain}\tTRUE\t/\tFALSE\t9999999999\t{name}\t{value}\n"
             )
@@ -238,6 +248,8 @@ def _parse_info(info: dict) -> dict:
         media_type = "image"
 
     thumbnail = info.get("thumbnail") or ""
+    filesize = info.get("filesize") or info.get("filesize_approx") or 0
+    duration = info.get("duration") or 0
 
     return {
         "url": media_url,
@@ -246,6 +258,8 @@ def _parse_info(info: dict) -> dict:
         "thumbnails": [thumbnail] if thumbnail else [],
         "title": info.get("title") or info.get("description") or "",
         "type": media_type,
+        "filesize": filesize,
+        "duration": duration,
     }
 
 
