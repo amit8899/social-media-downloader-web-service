@@ -211,11 +211,6 @@ async def download_media(
         },
     }
 
-    # Use OAuth2 TV device authentication for YouTube to permanently bypass datacenter bot checks
-    if "youtube.com" in url.lower() or "youtu.be" in url.lower():
-        ydl_opts["username"] = "oauth2"
-        ydl_opts["password"] = ""
-
     if cookie_file:
         ydl_opts["cookiefile"] = cookie_file
 
