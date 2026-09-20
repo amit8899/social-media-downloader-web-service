@@ -81,9 +81,8 @@ def _get_platform_headers(url: str) -> dict:
             "Accept-Language": "en-US,en;q=0.9",
         }
     elif "youtube.com" in u or "youtu.be" in u:
+        # Do not override User-Agent for YouTube – yt-dlp requires its internal native UAs per Innertube client (tv, android, ios, mweb)
         return {
-            "User-Agent": base_ua,
-            "Referer": "https://www.youtube.com/",
             "Accept-Language": "en-US,en;q=0.9",
         }
     elif "tiktok.com" in u:
