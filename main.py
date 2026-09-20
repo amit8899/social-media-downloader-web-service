@@ -190,12 +190,12 @@ async def download_media(
     cookie_file = _write_cookie_file(cookie, url)
     platform_headers = _get_platform_headers(url)
 
-    # When cookies are provided, yt-dlp requires mweb/web clients to attach browser cookies
+    # YouTube player clients: tv and tv_embedded bypass datacenter IP bot challenges
     if "youtube.com" in url.lower() or "youtu.be" in url.lower():
         if cookie_file:
-            youtube_clients = ["mweb", "web", "android"]
+            youtube_clients = ["tv_embedded", "tv", "mweb", "web", "android_creator", "ios"]
         else:
-            youtube_clients = ["android", "ios", "mweb", "web"]
+            youtube_clients = ["tv_embedded", "tv", "android_creator", "ios", "mweb", "web"]
     else:
         youtube_clients = ["web", "mweb"]
 
