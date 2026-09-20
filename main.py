@@ -189,14 +189,16 @@ async def download_media(
     cookie_file = _write_cookie_file(cookie, url)
     platform_headers = _get_platform_headers(url)
 
-    # YouTube player clients: tv and tv_embedded bypass datacenter IP bot challenges
+    # Android client is the only YouTube player client confirmed to work from
+    # datacenter IPs (Render) without requiring PO Tokens (as of Sep 2025).
+    # tv / tv_embedded / mweb / ios all now require GVS PO tokens or are blocked.
     if "youtube.com" in url.lower() or "youtu.be" in url.lower():
-        if cookie_file:
-            youtube_clients = ["tv_embedded", "tv", "mweb", "web", "android_creator", "ios"]
-        else:
-            youtube_clients = ["tv_embedded", "tv", "android_creator", "ios", "mweb", "web"]
+        youtube_clients = ["android", "android_creator"]
+        # android client returns format id=18 (360p mp4) as the only combined stream
+        youtube_format = "best[ext=mp4]/best"
     else:
         youtube_clients = ["web", "mweb"]
+        youtube_format = None
 
     ydl_opts = {
         "quiet": True,
@@ -210,6 +212,9 @@ async def download_media(
             }
         },
     }
+
+    if youtube_format:
+        ydl_opts["format"] = youtube_format
 
     if cookie_file:
         ydl_opts["cookiefile"] = cookie_file
