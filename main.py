@@ -144,8 +144,14 @@ def _write_cookie_file(cookie_header: str) -> str | None:
 
         # domain  subdom  path  secure  expiry  name  value
         for domain in domains:
+            # Domain-wide cookie
             lines.append(
                 f"{domain}\tTRUE\t/\tTRUE\t{expiry}\t{name}\t{value}\n"
+            )
+            # Host-only cookie
+            host = domain.lstrip(".")
+            lines.append(
+                f"{host}\tFALSE\t/\tTRUE\t{expiry}\t{name}\t{value}\n"
             )
 
     tmp = tempfile.NamedTemporaryFile(
@@ -198,8 +204,7 @@ async def download_media(
         "http_headers": platform_headers,
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "ios", "mweb", "web"],
-                "player_skip": ["js", "configs", "webpage"],
+                "player_client": ["android", "ios", "mweb"],
             }
         },
     }
