@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: social-media-downloader
+    runtime: python
+    plan: free                      # or starter
+    region: oregon                  # or your preferred region
+
+    buildCommand: >
+      apt-get install -y ffmpeg &&
+      pip install
+      "yt-dlp[default]>=2025.7.21"
+      "fastapi>=0.116.1"
+      "uvicorn>=0.35.0"
+      "python-dotenv>=1.1.1"
+      "python-multipart>=0.0.20"
+
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+
+    healthCheckPath: /health        # uses the cheap GET /health (does NOT call yt-dlp)
+
+    envVars:
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PORT
+        value: "10000"             # Render assigns this automatically — keep as placeholder
