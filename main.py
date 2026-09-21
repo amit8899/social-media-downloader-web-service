@@ -1,20 +1,60 @@
+"""
+Social Media Downloader — FastAPI application entry point.
+
+Architecture:
+  Android → POST /extract → FastAPI → extractor service → yt-dlp → ExtractionResult → Android
+                                                                   (extraction only, no file download)
+
+Endpoints:
+  GET  /health         Lightweight health check (does NOT call yt-dlp)
+  GET  /ping           Keep-alive / Render cold-start prevention
+  POST /extract        Normalized extraction (new, preferred)
+  GET  /download       Legacy backward-compat endpoint (kept during migration)
+  GET  /diagnostics    Development-only: yt-dlp/FFmpeg/runtime diagnostics
+  GET  /               API info root
+
+See README.md for migration guide.
+"""
+from __future__ import annotations
+
+import logging
 import os
-import json
-import hashlib
-import tempfile
 import time
-from collections import OrderedDict
-from fastapi import FastAPI, Query, Header, HTTPException
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-import yt_dlp
+import uuid
+from typing import Optional
+
 from dotenv import load_dotenv
+from fastapi import FastAPI, Query, Header
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+import yt_dlp
+
+from api.extract import router as extract_router
+from api.diagnostics import router as diagnostics_router
+from extractor import yt_dlp_service
+from extractor.errors import ExtractionException, classify_yt_dlp_error
+from extractor.models import ExtractionError, ExtractionResult
+from utils.cache import get_cache
+from utils.cookies import create_cookie_file, delete_cookie_file
+from utils.logging_config import configure_logging
+
+# ── Initialise ────────────────────────────────────────────────────────────────
 load_dotenv()
+configure_logging(os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger("main")
 
-app = FastAPI()
+app = FastAPI(
+    title="Social Media Downloader API",
+    description=(
+        "FastAPI + yt-dlp extraction service. "
+        "Android downloads media directly from extracted CDN URLs — "
+        "the server performs extraction only."
+    ),
+    version="2.0.0",
+)
 
-# CORS – allow any origin so your Android app can reach it
+# ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,325 +63,171 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------------------------------------------------------------------
-# Simple in-memory LRU cache  (url → result, TTL = 60 min)
-# ---------------------------------------------------------------------------
-_CACHE_MAX = 200
-_CACHE_TTL = 3600  # seconds
-
-class _LRUCache:
-    def __init__(self, maxsize: int, ttl: int):
-        self._cache: OrderedDict[str, tuple[float, dict]] = OrderedDict()
-        self._maxsize = maxsize
-        self._ttl = ttl
-
-    def _key(self, url: str, cookies: str) -> str:
-        raw = f"{url}|{cookies or ''}"
-        return hashlib.md5(raw.encode()).hexdigest()
-
-    def get(self, url: str, cookies: str):
-        key = self._key(url, cookies)
-        if key in self._cache:
-            ts, value = self._cache[key]
-            if time.time() - ts < self._ttl:
-                self._cache.move_to_end(key)
-                return value
-            else:
-                del self._cache[key]
-        return None
-
-    def set(self, url: str, cookies: str, value: dict):
-        key = self._key(url, cookies)
-        self._cache[key] = (time.time(), value)
-        self._cache.move_to_end(key)
-        if len(self._cache) > self._maxsize:
-            self._cache.popitem(last=False)
-
-_cache = _LRUCache(_CACHE_MAX, _CACHE_TTL)
+# ── Mount routers ─────────────────────────────────────────────────────────────
+app.include_router(extract_router)
+app.include_router(diagnostics_router)
 
 
-def _get_platform_headers(url: str) -> dict:
-    """Returns appropriate HTTP headers for the requested platform URL."""
-    u = url.lower()
-    base_ua = (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/125.0.0.0 Safari/537.36"
-    )
-    if "instagram.com" in u:
-        return {
-            "User-Agent": base_ua,
-            "Referer": "https://www.instagram.com/",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-    elif "facebook.com" in u or "fb.watch" in u or "fb.com" in u:
-        return {
-            "User-Agent": base_ua,
-            "Referer": "https://www.facebook.com/",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-    elif "youtube.com" in u or "youtu.be" in u:
-        # Do not override User-Agent for YouTube – yt-dlp requires its internal native UAs per Innertube client (tv, android, ios, mweb)
-        return {
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-    elif "tiktok.com" in u:
-        return {
-            "User-Agent": base_ua,
-            "Referer": "https://www.tiktok.com/",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-    return {
-        "User-Agent": base_ua,
-        "Accept-Language": "en-US,en;q=0.9",
-    }
+# ── Health / root ─────────────────────────────────────────────────────────────
 
-
-# ---------------------------------------------------------------------------
-# Helper – write Netscape cookie file from raw "Cookie:" header string
-# ---------------------------------------------------------------------------
-def _write_cookie_file(cookie_header: str, url: str) -> str | None:
+@app.get("/health")
+async def health():
     """
-    Converts the raw Cookie header value (the same string the browser sends,
-    e.g.  "sessionid=abc; csrftoken=xyz; ds_user_id=123; LOGIN_INFO=...; SID=...")
-    into a valid Netscape-format cookies.txt file that yt-dlp can parse into its CookieJar.
-    Returns the temp file path, or None if cookie_header is empty.
+    Lightweight health check — does NOT invoke yt-dlp.
+    Use this for Render's health check path to keep it cheap.
     """
-    if not cookie_header or not cookie_header.strip():
-        return None
-
-    # Standard Netscape max 32-bit timestamp
-    expiry = "2147483647"
-
-    u = url.lower()
-    if "youtube.com" in u or "youtu.be" in u:
-        domains = [".youtube.com", "youtube.com", ".google.com", "google.com"]
-    elif "instagram.com" in u:
-        domains = [".instagram.com", "instagram.com"]
-    elif "facebook.com" in u or "fb.watch" in u or "fb.com" in u:
-        domains = [".facebook.com", "facebook.com", ".fb.com", "fb.com"]
-    elif "tiktok.com" in u:
-        domains = [".tiktok.com", "tiktok.com"]
-    elif "twitter.com" in u or "x.com" in u:
-        domains = [".twitter.com", "twitter.com", ".x.com", "x.com"]
-    else:
-        domains = [".youtube.com", ".google.com", ".instagram.com", ".facebook.com"]
-
-    lines = [
-        "# Netscape HTTP Cookie File\n",
-        "# https://curl.haxx.se/rfc/cookie_spec.html\n",
-        "# This file was generated by Social Media Downloader\n",
-    ]
-
-    for pair in cookie_header.split(";"):
-        pair = pair.strip()
-        if "=" not in pair:
-            continue
-        name, _, value = pair.partition("=")
-        name = name.strip()
-        value = value.strip()
-        if not name:
-            continue
-
-        for domain in domains:
-            include_sub = "TRUE" if domain.startswith(".") else "FALSE"
-            lines.append(f"{domain}\t{include_sub}\t/\tTRUE\t{expiry}\t{name}\t{value}\n")
-
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, prefix="cookies_"
-    )
-    tmp.writelines(lines)
-    tmp.flush()
-    tmp.close()
-    return tmp.name
+    return {"status": "ok"}
 
 
-# ---------------------------------------------------------------------------
-# /download  – returns JSON with media URL(s)
-# ---------------------------------------------------------------------------
-@app.get("/download")
-async def download_media(
-    url: str = Query(..., description="Public or private social media URL"),
-    cookie: str = Header(
-        default=None,
-        alias="X-User-Cookie",
-        description="Raw Cookie header string from user's browser session",
-    ),
-):
-    """
-    Returns JSON:
-      {
-        "url":        "<direct media URL>",   // first/best video or image
-        "urls":       ["<url1>", "<url2>"],   // all URLs (carousel/album)
-        "thumbnail":  "<thumb url>",
-        "title":      "<post title>",
-        "type":       "video" | "image",
-        "from_cache": true | false
-      }
-    """
-    # 1. Cache lookup
-    cached = _cache.get(url, cookie or "")
-    if cached:
-        cached["from_cache"] = True
-        return JSONResponse(content=cached, headers={"Cache-Control": "max-age=3600, public"})
-
-    # 2. Build yt-dlp options
-    cookie_file = _write_cookie_file(cookie, url)
-    platform_headers = _get_platform_headers(url)
-
-    # Android client is the only YouTube player client confirmed to work from
-    # datacenter IPs (Render) without requiring PO Tokens (as of Sep 2025).
-    # tv / tv_embedded / mweb / ios all now require GVS PO tokens or are blocked.
-    if "youtube.com" in url.lower() or "youtu.be" in url.lower():
-        youtube_clients = ["android", "android_creator"]
-        # android client returns format id=18 (360p mp4) as the only combined stream
-        youtube_format = "best[ext=mp4]/best"
-    else:
-        youtube_clients = ["web", "mweb"]
-        youtube_format = None
-
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,       # we only want the info dict, NOT the file
-        "extract_flat": False,
-        "http_headers": platform_headers,
-        "extractor_args": {
-            "youtube": {
-                "player_client": youtube_clients,
-            }
-        },
-    }
-
-    if youtube_format:
-        ydl_opts["format"] = youtube_format
-
-    if cookie_file:
-        ydl_opts["cookiefile"] = cookie_file
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-    except yt_dlp.utils.DownloadError as e:
-        raise HTTPException(status_code=422, detail=f"yt-dlp error: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-    finally:
-        if cookie_file:
-            try:
-                os.unlink(cookie_file)
-            except OSError:
-                pass
-
-    if not info:
-        raise HTTPException(status_code=404, detail="No media info extracted")
-
-    # 3. Parse info dict → unified response
-    result = _parse_info(info)
-
-    # 4. Store in cache
-    _cache.set(url, cookie or "", result)
-
-    return JSONResponse(
-        content={**result, "from_cache": False},
-        headers={"Cache-Control": "max-age=3600, public"},
-    )
-
-
-def _best_video_url(info: dict) -> str | None:
-    """Pick the best video URL from formats list."""
-    formats = info.get("formats") or []
-    # Prefer mp4 with both video+audio, pick highest height
-    video_formats = [
-        f for f in formats
-        if f.get("vcodec") not in (None, "none")
-        and f.get("acodec") not in (None, "none")
-        and f.get("url")
-    ]
-    if not video_formats:
-        # Fall back to any format that has a URL
-        video_formats = [f for f in formats if f.get("url")]
-
-    if video_formats:
-        video_formats.sort(key=lambda f: f.get("height") or 0, reverse=True)
-        return video_formats[0]["url"]
-
-    return info.get("url")
-
-
-def _parse_info(info: dict) -> dict:
-    """Convert yt-dlp info dict to our simple response format."""
-    # Handle playlists / carousels
-    entries = info.get("entries")
-    if entries:
-        urls = []
-        thumbs = []
-        media_type = "image"
-        for entry in entries:
-            if not entry:
-                continue
-            if entry.get("vcodec") != "none" or entry.get("formats"):
-                u = _best_video_url(entry) or entry.get("url", "")
-                media_type = "video"
-            else:
-                u = entry.get("url") or entry.get("thumbnail") or ""
-            urls.append(u)
-            thumbs.append(entry.get("thumbnail") or "")
-
-        return {
-            "url": urls[0] if urls else "",
-            "urls": urls,
-            "thumbnail": thumbs[0] if thumbs else "",
-            "thumbnails": thumbs,
-            "title": info.get("title") or info.get("description") or "",
-            "type": media_type,
-        }
-
-    # Single item
-    vcodec = info.get("vcodec", "")
-    is_video = vcodec and vcodec != "none"
-
-    if is_video or info.get("formats"):
-        media_url = _best_video_url(info) or ""
-        media_type = "video"
-    else:
-        media_url = info.get("url") or info.get("thumbnail") or ""
-        media_type = "image"
-
-    thumbnail = info.get("thumbnail") or ""
-    filesize = info.get("filesize") or info.get("filesize_approx") or 0
-    duration = info.get("duration") or 0
-
-    return {
-        "url": media_url,
-        "urls": [media_url] if media_url else [],
-        "thumbnail": thumbnail,
-        "thumbnails": [thumbnail] if thumbnail else [],
-        "title": info.get("title") or info.get("description") or "",
-        "type": media_type,
-        "filesize": filesize,
-        "duration": duration,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Health-check / keep-alive endpoint (prevents Render cold starts when pinged)
-# ---------------------------------------------------------------------------
 @app.get("/ping")
 async def ping():
+    """Keep-alive / Render cold-start prevention."""
     return {"status": "ok", "timestamp": int(time.time())}
 
 
 @app.get("/")
 async def root():
     return {
-        "message": (
-            "Social Media Video Downloader API. "
-            "GET /download?url=<url> — pass X-User-Cookie header for private content."
-        )
+        "service": "Social Media Downloader API v2",
+        "endpoints": {
+            "POST /extract": "Normalized extraction (preferred)",
+            "GET /download":  "Legacy endpoint (backward compat)",
+            "GET /health":    "Health check",
+            "GET /diagnostics": "Dev diagnostics (remove before production)",
+        },
     }
 
 
+# ── Legacy GET /download  (backward compatibility) ────────────────────────────
+#
+# This endpoint is kept so Android can continue working during the migration
+# to POST /extract. Do not add new features here. Migrate Android to
+# POST /extract and then remove this endpoint.
+
+@app.get("/download")
+async def download_media_legacy(
+    url: str = Query(..., description="Social media URL"),
+    x_user_cookie: Optional[str] = Header(default=None, alias="X-User-Cookie"),
+):
+    """
+    Legacy extraction endpoint.
+
+    Returns the same JSON shape as before so existing Android code continues
+    to work without changes. New Android code should use POST /extract.
+
+    Response shape (unchanged from v1):
+      {
+        "url":        "<best direct URL>",
+        "urls":       ["<url1>", ...],
+        "thumbnail":  "<thumb url>",
+        "title":      "<title>",
+        "type":       "video" | "image",
+        "from_cache": true | false
+      }
+    """
+    request_id = str(uuid.uuid4())
+    cache = get_cache()
+    has_cookies = bool(x_user_cookie)
+
+    # Cache check
+    cached = cache.get(url, has_cookies)
+    if cached:
+        legacy = _result_to_legacy(cached)
+        legacy["from_cache"] = True
+        return JSONResponse(content=legacy)
+
+    platform = yt_dlp_service.detect_platform(url)
+    cookie_file = None
+    try:
+        if x_user_cookie:
+            cookie_file = create_cookie_file(x_user_cookie, platform)
+
+        result: ExtractionResult = await yt_dlp_service.extract(
+            url=url,
+            request_id=request_id,
+            cookie_file=cookie_file,
+            platform=platform,
+        )
+    except ExtractionException as exc:
+        return JSONResponse(
+            content={"error": exc.message, "url": "", "urls": [], "from_cache": False},
+            status_code=502,
+        )
+    except Exception:
+        return JSONResponse(
+            content={"error": "Unexpected server error", "url": "", "urls": [], "from_cache": False},
+            status_code=500,
+        )
+    finally:
+        delete_cookie_file(cookie_file)
+
+    result_dict = result.model_dump(mode="json")
+    cache.set(url, has_cookies, result_dict)
+
+    legacy = _result_to_legacy(result_dict)
+    legacy["from_cache"] = False
+    return JSONResponse(content=legacy)
+
+
+def _result_to_legacy(result: dict) -> dict:
+    """
+    Convert a normalized ExtractionResult dict to the v1 legacy response shape
+    so Android v1 code continues to work unchanged.
+    """
+    if not result.get("success", True):
+        err = (result.get("error") or {}).get("message", "Extraction failed")
+        return {"url": "", "urls": [], "thumbnail": "", "title": "", "type": "video", "error": err}
+
+    entries = result.get("entries") or []
+    if entries:
+        urls = [e.get("url") or "" for e in entries]
+        thumbs = [e.get("thumbnail") or "" for e in entries]
+        media_type = "video" if any(e.get("media_type") == "video" for e in entries) else "image"
+        return {
+            "url": urls[0] if urls else "",
+            "urls": urls,
+            "thumbnail": thumbs[0] if thumbs else "",
+            "thumbnails": thumbs,
+            "title": result.get("title") or "",
+            "type": media_type,
+            "filesize": 0,
+            "duration": result.get("duration") or 0,
+        }
+
+    formats = result.get("formats") or []
+
+    # Pick best combined URL for the legacy single-URL field
+    combined = [f for f in formats if f.get("has_video") and f.get("has_audio") and f.get("url")]
+    if not combined:
+        combined = [f for f in formats if f.get("url")]
+    combined.sort(key=lambda f: f.get("height") or 0, reverse=True)
+    best_url = combined[0]["url"] if combined else ""
+
+    all_urls = [f["url"] for f in formats if f.get("url")]
+    media_type = result.get("media_type") or "unknown"
+    if media_type not in ("video", "image", "audio"):
+        media_type = "video"
+
+    best_fmt = combined[0] if combined else {}
+    return {
+        "url": best_url,
+        "urls": all_urls,
+        "thumbnail": result.get("thumbnail") or "",
+        "thumbnails": [result.get("thumbnail")] if result.get("thumbnail") else [],
+        "title": result.get("title") or "",
+        "type": media_type,
+        "filesize": best_fmt.get("filesize") or best_fmt.get("filesize_approx") or 0,
+        "duration": result.get("duration") or 0,
+    }
+
+
+# ── Dev entry point ───────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 8000)),
+        reload=False,
+    )
