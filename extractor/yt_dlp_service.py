@@ -99,26 +99,31 @@ def build_youtube_options() -> dict:
     YouTube-specific yt-dlp options.
 
     Isolated here so YouTube configuration can be changed without touching
-    any other code. Do not hardcode a permanent client choice — keep it easy
-    to swap when YouTube changes its extraction requirements.
+    any other code.
 
-    Current approach:
-      - Use yt-dlp defaults (let yt-dlp pick the best working client)
-      - Do NOT force android/android_creator permanently
-      - Do NOT hardcode any PO token
-      - Do NOT restrict format selection at extraction time
-        (Android picks quality; server returns all available formats)
+    CONFIRMED from Render logs (2026-09-21):
+      Error: "Sign in to confirm you're not a bot"
+      Cause: Render datacenter IP blocked by YouTube's default web client.
+      Error: KeyError('INNERTUBE_CONTEXT')
+      Cause: yt-dlp tried an incompatible client when cookies were supplied.
+
+    Fix: Force the `android` client, which:
+      - Does NOT require PO tokens from datacenter IPs (as of 2025-10)
+      - Has a stable INNERTUBE_CONTEXT that doesn't conflict with cookies
+      - Returns progressive mp4 format 18 (360p combined) + separate streams
+      - `tv_embedded` is added as fallback for age-gated content
+
+    If this breaks in future, update ONLY this function.
+    Do NOT hardcode any PO token here.
     """
     opts = _build_base_options()
-    # Let yt-dlp choose the client. Only add extractor_args if a specific
-    # workaround is required after observing an actual failure.
-    # Uncomment and adjust only when the specific error is confirmed:
-    #
-    # opts["extractor_args"] = {
-    #     "youtube": {
-    #         "player_client": ["android", "web"],
-    #     }
-    # }
+    opts["extractor_args"] = {
+        "youtube": {
+            # android: works from datacenter IPs, no PO token required
+            # tv_embedded: fallback for age-gated / restricted content
+            "player_client": ["android", "tv_embedded"],
+        }
+    }
     return opts
 
 

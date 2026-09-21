@@ -116,6 +116,13 @@ def classify_yt_dlp_error(exc: Exception) -> ExtractionException:
                                "503", "502")):
         return TemporaryPlatformError()
 
+    # yt-dlp internal client config error — usually means wrong player client
+    # for this IP/context. Retryable because a client switch may fix it.
+    if "innertube_context" in raw or "keyerror" in raw:
+        return BotDetectionError(
+            "YouTube blocked this request — the extraction client needs updating"
+        )
+
     if isinstance(exc, yt_utils.UnsupportedError):
         return UnsupportedURLError()
 
