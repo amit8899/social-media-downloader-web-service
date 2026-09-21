@@ -218,6 +218,7 @@ def _result_to_legacy(result: dict) -> dict:
         "type": media_type,
         "filesize": best_fmt.get("filesize") or best_fmt.get("filesize_approx") or 0,
         "duration": result.get("duration") or 0,
+        "formats": formats,
     }
 
 
