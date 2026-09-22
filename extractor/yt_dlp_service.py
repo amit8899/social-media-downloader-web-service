@@ -120,8 +120,9 @@ def build_youtube_options() -> dict:
     opts["extractor_args"] = {
         "youtube": {
             # android: works from datacenter IPs, no PO token required
-            # tv_embedded: fallback for age-gated / restricted content
-            "player_client": ["android", "tv_embedded"],
+            "player_client": ["android"],
+            # player_skip: skip webpage HTML download which triggers bot detection on datacenter IPs
+            "player_skip": ["webpage", "configs"],
             "formats": ["missing_pot"],
         }
     }

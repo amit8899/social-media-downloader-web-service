@@ -95,7 +95,12 @@ def classify_yt_dlp_error(exc: Exception) -> ExtractionException:
                                "region", "territory", "country")):
         return GeoRestrictedError()
 
-    if any(k in raw for k in ("login", "sign in", "signin", "authentication required",
+    if any(k in raw for k in ("bot", "captcha", "unusual traffic",
+                               "po token", "gvs", "botguard", "confirm you",
+                               "sign in to confirm", "are you human")):
+        return BotDetectionError()
+
+    if any(k in raw for k in ("login", "authentication required",
                                "private", "account is private")):
         return LoginRequiredError()
 
@@ -103,11 +108,6 @@ def classify_yt_dlp_error(exc: Exception) -> ExtractionException:
                                "is not available", "no longer available",
                                "removed", "deleted", "404")):
         return VideoUnavailableError()
-
-    if any(k in raw for k in ("bot", "captcha", "unusual traffic",
-                               "po token", "gvs", "botguard", "confirm you",
-                               "are you human", "403")):
-        return BotDetectionError()
 
     if any(k in raw for k in ("rate limit", "too many requests", "429")):
         return RateLimitedError()
