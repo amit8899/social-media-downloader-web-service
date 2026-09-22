@@ -40,6 +40,7 @@ class MediaFormat(BaseModel):
     tbr: Optional[float] = None      # total bitrate kbps
     protocol: Optional[str] = None
     url: Optional[str] = None
+    audio_url: Optional[str] = None
     has_video: bool = False
     has_audio: bool = False
     downloadable_directly: bool = True  # False when needs server-side merge

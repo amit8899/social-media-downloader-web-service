@@ -197,7 +197,7 @@ def _result_to_legacy(result: dict) -> dict:
     formats = result.get("formats") or []
 
     # Pick best combined URL for the legacy single-URL field
-    combined = [f for f in formats if f.get("has_video") and f.get("has_audio") and f.get("url")]
+    combined = [f for f in formats if f.get("has_video") and (f.get("has_audio") or f.get("audio_url")) and f.get("url")]
     if not combined:
         combined = [f for f in formats if f.get("url")]
     combined.sort(key=lambda f: f.get("height") or 0, reverse=True)

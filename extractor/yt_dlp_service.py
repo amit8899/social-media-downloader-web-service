@@ -122,6 +122,7 @@ def build_youtube_options() -> dict:
             # android: works from datacenter IPs, no PO token required
             # tv_embedded: fallback for age-gated / restricted content
             "player_client": ["android", "tv_embedded"],
+            "formats": ["missing_pot"],
         }
     }
     return opts
@@ -221,6 +222,7 @@ def _normalize_format(fmt: dict) -> MediaFormat:
         tbr=fmt.get("tbr"),
         protocol=fmt.get("protocol"),
         url=fmt.get("url"),
+        audio_url=None,
         has_video=has_video,
         has_audio=has_audio,
         downloadable_directly=True,  # always true for extracted URLs
@@ -232,10 +234,41 @@ def _normalize_formats(info: dict) -> list[MediaFormat]:
     """Extract and normalize all formats from an info dict."""
     raw_formats = info.get("formats") or []
     result = []
+
+    # First pass: find best audio track URL for muxing
+    best_audio_url = None
+    best_audio_score = -1
+    for fmt in raw_formats:
+        url = fmt.get("url")
+        if not url:
+            continue
+        vcodec = fmt.get("vcodec") or "none"
+        acodec = fmt.get("acodec") or "none"
+        has_v = vcodec not in ("none", "")
+        has_a = acodec not in ("none", "")
+        if has_a and not has_v:
+            ext = (fmt.get("ext") or "").lower()
+            is_m4a = 1 if ext in ("m4a", "mp3") else 0
+            size = fmt.get("filesize") or fmt.get("filesize_approx") or 0
+            abr = fmt.get("abr") or 0
+            score = (is_m4a * 1000000000) + int(abr * 1000000) + size
+            if score > best_audio_score:
+                best_audio_score = score
+                best_audio_url = url
+
     for fmt in raw_formats:
         if not fmt.get("url"):
             continue
-        result.append(_normalize_format(fmt))
+        ext = (fmt.get("ext") or "").lower()
+        fid = str(fmt.get("format_id", "")).lower()
+        # Filter out storyboard formats
+        if ext == "mhtml" or fid.startswith("sb"):
+            continue
+        norm_fmt = _normalize_format(fmt)
+        if norm_fmt.has_video and not norm_fmt.has_audio and best_audio_url:
+            norm_fmt.audio_url = best_audio_url
+        result.append(norm_fmt)
+
     # If no formats list but top-level url exists, synthesize one entry
     if not result and info.get("url"):
         vcodec = info.get("vcodec") or "none"
@@ -251,6 +284,7 @@ def _normalize_formats(info: dict) -> list[MediaFormat]:
             vcodec=vcodec if vcodec != "none" else None,
             acodec=acodec if acodec != "none" else None,
             url=info.get("url"),
+            audio_url=None,
             has_video=vcodec not in ("none", ""),
             has_audio=acodec not in ("none", ""),
             downloadable_directly=True,
