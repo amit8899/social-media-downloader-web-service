@@ -1,79 +1,142 @@
-# 🎥 Social Media Video Downloader
+# 🎥 Social Media Video Downloader & Dynamic Extractor Web Service
 
-A lightweight FastAPI-based web API that allows you to download videos from various platforms such as **YouTube**, **TikTok**, **Facebook**, **Instagram**, **Twitter**, and more. This API uses the powerful `yt-dlp` tool to fetch videos and streams them directly to the client without storing them on the server. Perfect for integration with mobile apps, web clients, or educational tools.
-
----
-
-## ✅ Features
-
-- 🚀 FastAPI-based RESTful API
-- 🎞️ Download videos from YouTube and many social media sites
-- 🎚️ Select video resolution (360p, 720p, 1080p, etc.)
-- 🧾 Video filename auto-renamed to original title
-- 📥 Streams videos directly to the browser/download manager
-- 📱 Ready for frontend and mobile (Flutter, React, etc.)
-- ☁️ Works with free hosting platforms like Glitch, Render, Railway
+> High-performance FastAPI extraction service and remote dynamic Python script server for the Social Media Downloader Android application.
 
 ---
 
-## 📦 Installation
+## 🌟 Architecture Overview
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yasirali646/social-media-video-downloader.git
-   cd social-media-video-downloader
-2. Install Dependencies (Using uv)
-    ```bash
-    uv venv
-    source .venv/bin/activate  # or .venv\Scripts\activate on Windows
-    uv add fastapi uvicorn yt-dlp python-multipart python-dotenv
-3. Run the App
-    ```bash
-    uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-    ```
+This web service fulfills **two critical roles** in the Social Media Downloader ecosystem:
 
-## 🧪 Usage
-
-#### HTML Form
-
-``` 
-<form action="/download" method="get">
-  <input name="url" placeholder="Enter video URL" required />
-  <select name="format">
-    <option value="best[height<=360]">360p</option>
-    <option value="best[height<=720]">720p</option>
-    <option value="best[height<=1080]">1080p</option>
-  </select>
-  <button type="submit">Download</button>
-</form>
+```
+                            ┌───────────────────────────────────────────────┐
+                            │           User Device (Android App)          │
+                            └───────┬───────────────────────────────┬───────┘
+                                    │                               │
+             1. On App Launch       │                               │ 2. Cloud Fallback
+       (Checks for parser updates)  │                               │    (If on-device fails)
+                                    ▼                               ▼
+                      ┌───────────────────────────┐   ┌───────────────────────────┐
+                      │ GET /api/extractors/latest│   │    GET /download?url=...  │
+                      │                           │   │    POST /extract          │
+                      │  Serves extract_video.py  │   │  Runs yt-dlp on Server    │
+                      └───────────────────────────┘   └───────────────────────────┘
 ```
 
-### API Request
+1. **Dynamic Extractor Host (`/api/extractors/latest`)**:
+   Serves the latest `extract_video.py` parser script to Android clients. This allows updating website extractors (YouTube, Instagram, PornHub, Facebook, TikTok) in **under 2 minutes** without requiring an APK rebuild or Google Play Store update.
+2. **Cloud Extraction API (`/download` & `/extract`)**:
+   Provides backend fallback extraction powered by `FastAPI` + `yt-dlp` for clients when local device extraction is unavailable or fails.
 
-``` 
-GET /download?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ&format=best[height<=720]
+---
+
+## 🚀 Why This Architecture? (Residential IP vs. Datacenter IP)
+
+| Problem | Server-Only Extraction | Static APK Extractor | **Dynamic Hybrid (This Architecture)** |
+|---|---|---|---|
+| **Bot Blocking & Captchas** | ❌ Blocked by Cloudflare/Instagram/YouTube on datacenter IPs | ✅ Runs on device's mobile IP | ✅ **Runs on device's mobile IP** |
+| **Speed to Fix Broken Sites** | ✅ Fast (Update server) | ❌ Slow (2–3 day Google Play review) | ✅ **Fast (Push to server repo)** |
+| **Offline / Resiliency** | ❌ Fails when server down | ✅ Fails safe to local code | ✅ **Fails safe to bundled APK script** |
+| **Google Play Compliance** | ✅ Compliant | ✅ Compliant | ✅ **Compliant** |
+
+By serving the Python script dynamically, the app downloads the latest parser from this server and executes it inside Chaquopy on the user's phone, utilizing their real residential mobile IP (bypassing cloud IP bans).
+
+---
+
+## 🛠️ How to Update Website Extractors (SOP)
+
+When a social media platform updates its website or API:
+
+### 1. Edit the Extractor
+Modify [`extract_video.py`](extract_video.py) in this repository with updated regex, player configurations, or API signatures.
+
+### 2. Bump the Version Number
+In [`main.py`](main.py), increment `EXTRACTOR_VERSION`:
+```python
+# Increment version (e.g., from 2 to 3)
+EXTRACTOR_VERSION = int(os.getenv("EXTRACTOR_VERSION", "3"))
 ```
 
-### Demo
+### 3. Verify Syntax Locally
+```bash
+python3 -m py_compile extract_video.py
+python3 -m py_compile main.py
+```
 
-![Demo](demo.gif)
+### 4. Commit and Push
+```bash
+git add extract_video.py main.py
+git commit -m "Fix extractor for <Platform> and bump version to 3"
+git push origin main
+```
 
+### 5. Render Auto-Deployment
+Render automatically deploys the updated code within 1–2 minutes.
+Verify the endpoint:
+```bash
+curl -s "https://social-media-video-downloader-2va3.onrender.com/api/extractors/latest" | head -c 200
+```
+**Done!** Android clients will automatically download and activate the new extractor on their next launch.
 
-## ✅ Supported Platforms
+---
 
-This project supports video downloads from the following platforms (and more):
+## 📡 API Endpoints
 
-- YouTube
-- TikTok
-- Instagram
-- Facebook
-- Twitter (X)
-- DailyMotion
-- Vimeo
-... and many more!
-> See the full list: <a href="https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md" target="_blank">yt-dlp Supported Sites</a>
+### 1. Dynamic Extractor Script
+- **Endpoint**: `GET /api/extractors/latest`
+- **Description**: Returns the latest `extract_video.py` script and its version for Android apps.
+- **Response**:
+```json
+{
+  "version": 2,
+  "filename": "extract_video.py",
+  "script": "import yt_dlp\n...",
+  "timestamp": 1727122390
+}
+```
+
+### 2. Media Extraction (Normalized v2)
+- **Endpoint**: `POST /extract`
+- **Body**:
+```json
+{
+  "url": "https://www.instagram.com/reel/...",
+  "cookies": "optional_cookies"
+}
+```
+
+### 3. Media Extraction (Legacy v1 Backward-Compat)
+- **Endpoint**: `GET /download?url=<URL>`
+- **Header**: `X-User-Cookie: <cookies>` (optional)
+
+### 4. Health Check
+- **Endpoint**: `GET /health`
+- **Response**: `{"status": "ok"}`
+
+---
+
+## 📦 Local Installation & Development
+
+### Requirements
+- Python 3.11+
+- [uv](https://github.com/astral-sh/uv) (recommended) or standard `pip`
+
+### Setup
+```bash
+# Clone
+git clone https://github.com/amit8899/social-media-downloader-web-service.git
+cd social-media-downloader-web-service
+
+# Create virtual environment & install dependencies
+uv venv
+source .venv/bin/activate   # On Windows: .venv\Scripts\activate
+uv pip install -r requirements.txt
+
+# Start local server
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+---
 
 ## ⚠️ Disclaimer
-This project is intended for <b>educational purposes only</b>. Downloading copyrighted material without permission may violate local laws and platform policies. Use responsibly.
-
-
+This service is intended for **personal and educational use**. Downloading copyrighted media without the copyright holder's authorization may violate terms of service and applicable laws. Use responsibly.
