@@ -33,7 +33,7 @@ import yt_dlp
 from api.extract import router as extract_router
 from api.diagnostics import router as diagnostics_router
 from extractor import yt_dlp_service
-from extractor.errors import ExtractionException, classify_yt_dlp_error
+from extractor.errors import ExtractionException, LoginRequiredError, classify_yt_dlp_error
 from extractor.models import ExtractionError, ExtractionResult
 from utils.cache import get_cache
 from utils.cookies import create_cookie_file, delete_cookie_file
@@ -176,9 +176,10 @@ async def download_media_legacy(
             platform=platform,
         )
     except ExtractionException as exc:
+        status_code = 422 if isinstance(exc, LoginRequiredError) else 502
         return JSONResponse(
-            content={"error": exc.message, "url": "", "urls": [], "from_cache": False},
-            status_code=502,
+            content={"error": exc.message, "error_code": exc.code, "url": "", "urls": [], "from_cache": False},
+            status_code=status_code,
         )
     except Exception:
         return JSONResponse(

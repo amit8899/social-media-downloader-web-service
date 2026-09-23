@@ -19,7 +19,7 @@ from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from extractor.errors import ExtractionException, InvalidURLError, UnsupportedURLError
+from extractor.errors import ExtractionException, InvalidURLError, UnsupportedURLError, LoginRequiredError
 from extractor.models import ExtractionError, ExtractionResult
 from extractor import yt_dlp_service
 from utils.cache import get_cache
@@ -91,6 +91,9 @@ async def extract_media(
         return _error_response(request_id, exc, status_code=400)
 
     except UnsupportedURLError as exc:
+        return _error_response(request_id, exc, status_code=422)
+
+    except LoginRequiredError as exc:
         return _error_response(request_id, exc, status_code=422)
 
     except ExtractionException as exc:

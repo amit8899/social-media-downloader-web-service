@@ -100,8 +100,9 @@ def classify_yt_dlp_error(exc: Exception) -> ExtractionException:
                                "sign in to confirm", "are you human")):
         return BotDetectionError()
 
-    if any(k in raw for k in ("login", "authentication required",
-                               "private", "account is private")):
+    if any(k in raw for k in ("log in", "login", "authentication",
+                               "private", "account is private", "private account",
+                               "checkpoint", "cookies", "--cookies")):
         return LoginRequiredError()
 
     if any(k in raw for k in ("video unavailable", "video is unavailable",
