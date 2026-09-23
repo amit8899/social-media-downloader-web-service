@@ -186,7 +186,7 @@ def _build_options(platform: str, cookie_file: Optional[str] = None) -> dict:
 
 # ── Format normalization ─────────────────────────────────────────────────────
 
-def _normalize_format(fmt: dict) -> MediaFormat:
+def _normalize_format(fmt: dict, platform: str = "") -> MediaFormat:
     """
     Convert one yt-dlp format dict to a normalized MediaFormat.
 
@@ -195,9 +195,21 @@ def _normalize_format(fmt: dict) -> MediaFormat:
     """
     vcodec = fmt.get("vcodec") or "none"
     acodec = fmt.get("acodec") or "none"
+    fid = str(fmt.get("format_id", "")).lower()
 
     has_video = vcodec not in ("none", "")
     has_audio = acodec not in ("none", "")
+
+    # Special handling for Instagram formats:
+    # Native video_versions have no acodec set, but ALWAYS contain audio.
+    # DASH audio streams have format_id like dash-audio or m4a/aac ext.
+    if platform == "instagram" or "instagram.com" in fmt.get("url", ""):
+        if not fid.startswith("dash"):
+            has_video = True
+            has_audio = True
+        elif fid.startswith("dash-audio") or fid.endswith("-audio") or (fmt.get("ext") or "").lower() in ("m4a", "aac"):
+            if not has_video:
+                has_audio = True
 
     height = fmt.get("height")
     if height and has_video:
@@ -231,7 +243,7 @@ def _normalize_format(fmt: dict) -> MediaFormat:
     )
 
 
-def _normalize_formats(info: dict) -> list[MediaFormat]:
+def _normalize_formats(info: dict, platform: str = "") -> list[MediaFormat]:
     """Extract and normalize all formats from an info dict."""
     raw_formats = info.get("formats") or []
     result = []
@@ -245,8 +257,12 @@ def _normalize_formats(info: dict) -> list[MediaFormat]:
             continue
         vcodec = fmt.get("vcodec") or "none"
         acodec = fmt.get("acodec") or "none"
+        fid = str(fmt.get("format_id", "")).lower()
         has_v = vcodec not in ("none", "")
         has_a = acodec not in ("none", "")
+        if platform == "instagram" and (fid.startswith("dash-audio") or fid.endswith("-audio") or (fmt.get("ext") or "").lower() in ("m4a", "aac")):
+            if not has_v:
+                has_a = True
         if has_a and not has_v:
             ext = (fmt.get("ext") or "").lower()
             is_m4a = 1 if ext in ("m4a", "mp3") else 0
@@ -257,6 +273,18 @@ def _normalize_formats(info: dict) -> list[MediaFormat]:
                 best_audio_score = score
                 best_audio_url = url
 
+    # Fallback: if no standalone audio stream exists, use audio from any progressive format that has audio
+    if not best_audio_url:
+        for fmt in raw_formats:
+            url = fmt.get("url")
+            if not url:
+                continue
+            fid = str(fmt.get("format_id", "")).lower()
+            acodec = fmt.get("acodec") or "none"
+            if acodec not in ("none", "") or (platform == "instagram" and not fid.startswith("dash")):
+                best_audio_url = url
+                break
+
     for fmt in raw_formats:
         if not fmt.get("url"):
             continue
@@ -265,7 +293,7 @@ def _normalize_formats(info: dict) -> list[MediaFormat]:
         # Filter out storyboard formats
         if ext == "mhtml" or fid.startswith("sb"):
             continue
-        norm_fmt = _normalize_format(fmt)
+        norm_fmt = _normalize_format(fmt, platform)
         if norm_fmt.has_video and not norm_fmt.has_audio and best_audio_url:
             norm_fmt.audio_url = best_audio_url
         result.append(norm_fmt)
@@ -407,7 +435,7 @@ def _build_result(info: dict, request_id: str, platform: str) -> ExtractionResul
         )
 
     # Single item
-    formats = _normalize_formats(info)
+    formats = _normalize_formats(info, platform)
     media_type = _detect_media_type(info, formats)
 
     return ExtractionResult(
