@@ -92,9 +92,36 @@ async def root():
         "endpoints": {
             "POST /extract": "Normalized extraction (preferred)",
             "GET /download":  "Legacy endpoint (backward compat)",
+            "GET /api/extractors/latest": "Latest dynamic Python extractor script",
             "GET /health":    "Health check",
             "GET /diagnostics": "Dev diagnostics (remove before production)",
         },
+    }
+
+
+# ── Dynamic Extractor Script Endpoint ─────────────────────────────────────────
+
+EXTRACTOR_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "extract_video.py")
+EXTRACTOR_VERSION = int(os.getenv("EXTRACTOR_VERSION", "2"))
+
+@app.get("/api/extractors/latest")
+async def get_latest_extractor():
+    """
+    Returns the latest dynamic extractor script and its version.
+    Android apps fetch this at launch to run the latest extraction logic
+    on the user's residential mobile IP without requiring an APK update.
+    """
+    if not os.path.exists(EXTRACTOR_SCRIPT_PATH):
+        return JSONResponse(status_code=404, content={"error": "extract_video.py not found on server"})
+
+    with open(EXTRACTOR_SCRIPT_PATH, "r", encoding="utf-8") as f:
+        script_content = f.read()
+
+    return {
+        "version": EXTRACTOR_VERSION,
+        "filename": "extract_video.py",
+        "script": script_content,
+        "timestamp": int(os.path.getmtime(EXTRACTOR_SCRIPT_PATH)),
     }
 
 
