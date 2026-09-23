@@ -455,14 +455,28 @@ def _build_result(info: dict, request_id: str, platform: str) -> ExtractionResul
     )
 
 
-# ── Blocking extraction (runs in thread pool) ─────────────────────────────────
-
 def _run_extraction(url: str, opts: dict) -> dict:
     """
     Blocking yt-dlp call. Must be executed in a thread, not in the event loop.
     """
     with yt_dlp.YoutubeDL(opts) as ydl:
-        return ydl.extract_info(url, download=False)
+        info = ydl.extract_info(url, download=False)
+        if info and opts.get("cookiefile") and ("instagram.com" in url or "/reel/" in url or "/p/" in url) and "/stories/" not in url:
+            curr_max_h = max([f.get("height") or 0 for f in (info.get("formats") or [])], default=0)
+            if curr_max_h < 1400:
+                try:
+                    pub_opts = dict(opts)
+                    pub_opts.pop("cookiefile", None)
+                    with yt_dlp.YoutubeDL(pub_opts) as pub_ydl:
+                        pub_info = pub_ydl.extract_info(url, download=False)
+                        if pub_info and pub_info.get("formats"):
+                            existing_fids = {f.get("format_id") for f in (info.get("formats") or [])}
+                            for pf in pub_info.get("formats", []):
+                                if pf.get("format_id") not in existing_fids and pf.get("url"):
+                                    info["formats"].append(pf)
+                except Exception as e:
+                    logger.debug("Instagram public DASH augmentation skipped: %s", e)
+        return info
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
