@@ -102,7 +102,8 @@ async def root():
 # ── Dynamic Extractor Script Endpoint ─────────────────────────────────────────
 
 EXTRACTOR_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "extract_video.py")
-EXTRACTOR_VERSION = int(os.getenv("EXTRACTOR_VERSION", "2"))
+FACEBOOK_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "facebook_updated.py")
+EXTRACTOR_VERSION = int(os.getenv("EXTRACTOR_VERSION", "3"))
 
 @app.get("/api/extractors/latest")
 async def get_latest_extractor():
@@ -117,10 +118,16 @@ async def get_latest_extractor():
     with open(EXTRACTOR_SCRIPT_PATH, "r", encoding="utf-8") as f:
         script_content = f.read()
 
+    fb_content = ""
+    if os.path.exists(FACEBOOK_SCRIPT_PATH):
+        with open(FACEBOOK_SCRIPT_PATH, "r", encoding="utf-8") as f:
+            fb_content = f.read()
+
     return {
         "version": EXTRACTOR_VERSION,
         "filename": "extract_video.py",
         "script": script_content,
+        "facebook_script": fb_content,
         "timestamp": int(os.path.getmtime(EXTRACTOR_SCRIPT_PATH)),
     }
 

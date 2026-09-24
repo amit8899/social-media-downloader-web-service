@@ -862,6 +862,7 @@ def extract_video(video_url, cookies_str=None, platform=None):
                 'has_audio': has_a,
                 'height': h,
                 'ext': fmt_ext,
+                'vcodec': vc,
                 'quality_label': ql,
                 'filesize': f_size,
                 'size_mb': f_size_mb,
@@ -900,12 +901,14 @@ def extract_video(video_url, cookies_str=None, platform=None):
         if high_video_fmts:
             raw_video_fmts = high_video_fmts
 
-        # 5. Sort video: prefer has_any_audio (muxable or progressive), height desc, native audio, MP4, then filesize
+        # 5. Sort video: prefer has_any_audio (muxable or progressive), height desc, H.264/AVC codec (for MediaMuxer compatibility), native audio, MP4, then filesize
         def _video_sort_key(f):
             has_any_audio = 1 if (f.get('has_audio') or f.get('audio_url')) else 0
+            vc_str = (f.get('vcodec') or '').lower()
+            is_h264 = 1 if ('avc' in vc_str or 'h264' in vc_str) else 0
             native_audio = 1 if f.get('has_audio') else 0
             is_mp4 = 1 if (f.get('ext') or '').upper() == 'MP4' else 0
-            return (has_any_audio, f.get('height', 0), native_audio, is_mp4, f.get('filesize', 0))
+            return (has_any_audio, f.get('height', 0), is_h264, native_audio, is_mp4, f.get('filesize', 0))
 
         raw_video_fmts.sort(key=_video_sort_key, reverse=True)
 
