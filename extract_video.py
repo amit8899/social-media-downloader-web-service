@@ -454,13 +454,11 @@ def extract_video(video_url, cookies_str=None, platform=None):
 
         # For YouTube: use android_vr and android clients.
         # android_vr provides high-resolution 1080p/2K/4K and 720p H.264/AVC streams and AAC audio
-        # without requiring GVS PO tokens (which cause HTTP 403 on standard android/ios clients).
-        # android provides progressive formats (like format 18).
+        # without requiring GVS PO tokens. android provides progressive formats (like format 18).
         if platform == 'youtube':
             ydl_opts['extractor_args'] = {
                 'youtube': {
                     'player_client': ['android_vr', 'android'],
-                    'player_skip': ['webpage', 'configs'],
                 }
             }
         elif platform == 'facebook':
