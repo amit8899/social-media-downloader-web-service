@@ -455,12 +455,12 @@ def extract_video(video_url, cookies_str=None, platform=None):
         # For YouTube: use android client.
         # android talks directly to the mobile Innertube API and returns complete progressive MP4 formats (video + audio),
         # which can be downloaded seamlessly by Android's DownloadManager without 403 Forbidden errors.
+        # Note: Do not pass formats: ['missing_pot'] because formats requiring GVS PO tokens yield HTTP 403 Forbidden.
         if platform == 'youtube':
             ydl_opts['extractor_args'] = {
                 'youtube': {
                     'player_client': ['android'],
                     'player_skip': ['webpage', 'configs'],
-                    'formats': ['missing_pot'],
                 }
             }
         elif platform == 'facebook':
