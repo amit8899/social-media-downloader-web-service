@@ -563,7 +563,6 @@ def extract_video(video_url, cookies_str=None, platform=None):
                         'youtube': {
                             'player_client': ['android'],
                             'player_skip': ['webpage'],
-                            'formats': ['missing_pot'],
                         }
                     }
                     try:
