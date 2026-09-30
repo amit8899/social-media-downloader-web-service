@@ -443,6 +443,7 @@ def extract_video(video_url, cookies_str=None, platform=None):
             'quiet': True,
             'no_warnings': True,
             'skip_download': True,
+            'socket_timeout': 15,
         }
 
         # For non-YouTube platforms, use standard desktop headers
@@ -452,13 +453,15 @@ def extract_video(video_url, cookies_str=None, platform=None):
                 'Accept-Language': 'en-US,en;q=0.9',
             }
 
-        # For YouTube: use android_vr and android clients.
-        # android_vr provides high-resolution 1080p/2K/4K and 720p H.264/AVC streams and AAC audio
-        # without requiring GVS PO tokens. android provides progressive formats (like format 18).
+        # For YouTube: use android client with missing_pot.
+        # android talks directly to the mobile Innertube API and returns progressive format 18
+        # (which downloads without 403 Forbidden errors) as well as all high quality DASH formats.
         if platform == 'youtube':
             ydl_opts['extractor_args'] = {
                 'youtube': {
-                    'player_client': ['android_vr', 'android'],
+                    'player_client': ['android'],
+                    'player_skip': ['webpage', 'configs'],
+                    'formats': ['missing_pot'],
                 }
             }
         elif platform == 'facebook':
@@ -559,8 +562,9 @@ def extract_video(video_url, cookies_str=None, platform=None):
                     ydl_opts_skip = dict(ydl_opts)
                     ydl_opts_skip['extractor_args'] = {
                         'youtube': {
-                            'player_client': ['android_vr', 'android'],
+                            'player_client': ['android'],
                             'player_skip': ['webpage'],
+                            'formats': ['missing_pot'],
                         }
                     }
                     try:
