@@ -453,16 +453,20 @@ def extract_video(video_url, cookies_str=None, platform=None):
                 'Accept-Language': 'en-US,en;q=0.9',
             }
 
-        # For YouTube: use tv_embedded client which returns DASH streams that work WITHOUT PO Token.
-        # - tv_embedded: Innertube TV client — DASH streams are signed without spc/PO Token requirement,
-        #   so high-quality (1080p, 720p) video+audio DASH downloads work reliably without 403 errors.
-        # - android: fallback client, returns itag=18 (360p progressive, always works)
-        # No 'missing_pot' filter — tv_embedded streams are inherently PO-Token-free.
+        # For YouTube: use android client with missing_pot.
+        # android talks directly to the mobile Innertube API and returns itag=18 (360p progressive,
+        # always works without PO Token) as well as high-quality DASH format listings.
+        # missing_pot: filters out DASH formats that require a Proof of Origin Token (would 403).
+        #
+        # ⚠️ DO NOT USE 'tv_embedded' client — tested and it only returns 1 raw format (itag=18 360p).
+        # ⚠️ DO NOT USE 'ios' client alone — returns DASH itag=137 which still 403s.
+        # ⚠️ DO NOT REMOVE 'missing_pot' — without it, DASH streams appear in format list but 403 on download.
         if platform == 'youtube':
             ydl_opts['extractor_args'] = {
                 'youtube': {
-                    'player_client': ['tv_embedded', 'android'],
+                    'player_client': ['android'],
                     'player_skip': ['webpage', 'configs'],
+                    'formats': ['missing_pot'],
                 }
             }
         elif platform == 'facebook':
