@@ -435,8 +435,8 @@ def extract_video(video_url, cookies_str=None, platform=None):
 
         print(f"[EXTRACT_VIDEO] Platform: {platform} | URL: {video_url} | Has cookies: {bool(cookies_str)}", flush=True)
 
-        # Write cookies if provided (skip for YouTube to avoid bot verification triggers)
-        if cookies_str and cookies_str.strip() and platform != 'youtube':
+        # Write cookies if provided (including YouTube authenticated sessions)
+        if cookies_str and cookies_str.strip():
             cookie_file = _write_cookie_file(cookies_str, platform)
 
         ydl_opts = {
@@ -455,12 +455,11 @@ def extract_video(video_url, cookies_str=None, platform=None):
 
         # For YouTube: use android client with missing_pot.
         # android talks directly to the mobile Innertube API and returns itag=18 (360p progressive,
-        # always works without PO Token) as well as high-quality DASH format listings.
-        # missing_pot: filters out DASH formats that require a Proof of Origin Token (would 403).
-        #
-        # ⚠️ DO NOT USE 'tv_embedded' client — tested and it only returns 1 raw format (itag=18 360p).
-        # ⚠️ DO NOT USE 'ios' client alone — returns DASH itag=137 which still 403s.
-        # ⚠️ DO NOT REMOVE 'missing_pot' — without it, DASH streams appear in format list but 403 on download.
+        # always works without PO Token) as well as high-quality DASH format listings (720p, 1080p).
+        # missing_pot: tells yt-dlp to include DASH formats even if PO Token is missing.
+        # Note: GoogleVideo CDN caps anonymous DASH streams at ~34.5MB. For short videos/Shorts (<34MB),
+        # 720p/1080p downloads cleanly. For longer videos (>34MB), GoogleVideo CDN enforces PO Token
+        # and returns HTTP 403 beyond ~35MB, in which case VideoAudioMuxer falls back to progressive itag=18 (360p).
         if platform == 'youtube':
             ydl_opts['extractor_args'] = {
                 'youtube': {
