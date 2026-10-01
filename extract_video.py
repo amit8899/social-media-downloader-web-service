@@ -874,24 +874,6 @@ def extract_video(video_url, cookies_str=None, platform=None):
                 'abr': abr_clean,
             })
 
-        # ── YouTube CDN Safety Filtering ──────────────────────────────────────
-        # GoogleVideo CDN strictly enforces Proof of Origin (PO) tokens on unauthenticated DASH streams.
-        # Anonymous requests past ~34.5MB will 100% fail with HTTP 403 Forbidden.
-        # - Shorts and short clips (duration <= 65s and filesize <= 34.5MB): DASH streams CAN download cleanly in 720p/1080p.
-        # - Long videos (> 65s or filesize > 34.5MB): DASH streams are blocked by YouTube.
-        # - Progressive itag=18 (has_video=True and has_audio=True): Exempt from PO Token and ALWAYS works.
-        if platform == 'youtube' and not cookie_file:
-            filtered_parsed = []
-            for f in parsed_formats:
-                is_v = f.get('has_video')
-                is_prog = f.get('has_video') and f.get('has_audio')
-                f_size = f.get('filesize', 0)
-                if is_v and not is_prog:
-                    if dur > 65 or f_size > (34 * 1024 * 1024):
-                        continue
-                filtered_parsed.append(f)
-            parsed_formats = filtered_parsed
-
         # ── Filter & Deduplicate Formats ──────────────────────────────────────
         # 1. Separate video and audio formats
         raw_video_fmts = [f for f in parsed_formats if f.get('has_video')]
