@@ -453,13 +453,14 @@ def extract_video(video_url, cookies_str=None, platform=None):
                 'Accept-Language': 'en-US,en;q=0.9',
             }
 
-        # For YouTube: use android client with missing_pot.
-        # android talks directly to the mobile Innertube API and returns progressive format 18
-        # (which downloads without 403 Forbidden errors) as well as all high quality DASH formats.
+        # For YouTube: use android + ios clients with missing_pot.
+        # - android: returns itag=18 (360p progressive, always works) + DASH formats
+        # - ios: returns higher-quality progressive streams (up to 1080p) without PO Token
+        # - missing_pot: filters out DASH formats that require Proof of Origin Token (would 403)
         if platform == 'youtube':
             ydl_opts['extractor_args'] = {
                 'youtube': {
-                    'player_client': ['android'],
+                    'player_client': ['ios', 'android'],
                     'player_skip': ['webpage', 'configs'],
                     'formats': ['missing_pot'],
                 }
