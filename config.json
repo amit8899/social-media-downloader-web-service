@@ -1,8 +1,6 @@
 {                                                                                                                                                                    
           "enable_supported_sites_check": true,                                                                                                                              
-          "supported_sites": [                                                                                                                                               
-            "youtube",                                                                                                                                                       
-            "youtu.be",                                                                                                                                                      
+          "supported_sites": [                                                                                                                                                                                                                                                                                                    
             "instagram",                                                                                                                                                     
             "facebook",                                                                                                                                                      
             "fb.watch",                                                                                                                                                      
