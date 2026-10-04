@@ -453,13 +453,9 @@ def extract_video(video_url, cookies_str=None, platform=None):
                 'Accept-Language': 'en-US,en;q=0.9',
             }
 
-        # For YouTube: use android client with missing_pot.
-        # android talks directly to the mobile Innertube API and returns itag=18 (360p progressive,
-        # always works without PO Token) as well as high-quality DASH format listings (720p, 1080p).
-        # missing_pot: tells yt-dlp to include DASH formats even if PO Token is missing.
-        # Note: GoogleVideo CDN caps anonymous DASH streams at ~34.5MB. For short videos/Shorts (<34MB),
-        # 720p/1080p downloads cleanly. For longer videos (>34MB), GoogleVideo CDN enforces PO Token
-        # and returns HTTP 403 beyond ~35MB, in which case VideoAudioMuxer falls back to progressive itag=18 (360p).
+        # For YouTube, first use the Android client for reliable metadata and progressive
+        # streams, then augment with web_safari HLS formats after extraction. HLS is the
+        # best non-PO-token path for HD when DASH GoogleVideo URLs return HTTP 403.
         if platform == 'youtube':
             ydl_opts['extractor_args'] = {
                 'youtube': {
@@ -557,38 +553,70 @@ def extract_video(video_url, cookies_str=None, platform=None):
                     else:
                         raise first_err
         else:
-            try:
-                info = _do_extract(ydl_opts)
-            except Exception as first_err:
-                # If YouTube extraction failed (e.g. webpage bot challenge), retry with player_skip: ['webpage'] as fallback
-                if platform == 'youtube':
-                    print(f"[EXTRACT_VIDEO] YouTube extraction without player_skip failed ({first_err}). Retrying with player_skip: ['webpage']...", flush=True)
-                    ydl_opts_skip = dict(ydl_opts)
-                    ydl_opts_skip['extractor_args'] = {
+            if platform == 'youtube':
+                try:
+                    info = _do_extract(ydl_opts)
+                except Exception as first_err:
+                    print(f"[EXTRACT_VIDEO] YouTube Android extraction failed ({first_err}). Trying web_safari HLS...", flush=True)
+                    ydl_opts_hls_only = dict(ydl_opts)
+                    ydl_opts_hls_only['extractor_args'] = {
                         'youtube': {
-                            'player_client': ['android'],
-                            'player_skip': ['webpage'],
+                            'player_client': ['web_safari'],
+                            'player_skip': ['configs'],
                             'formats': ['missing_pot'],
                         }
                     }
                     try:
-                        info = _do_extract(ydl_opts_skip)
+                        info = _do_extract(ydl_opts_hls_only)
                     except Exception as second_err:
-                        print(f"[EXTRACT_VIDEO] YouTube fallback extraction also failed: {second_err}", flush=True)
+                        print(f"[EXTRACT_VIDEO] YouTube web_safari HLS extraction failed: {second_err}", flush=True)
                         if cookie_file:
                             print("[EXTRACT_VIDEO] Retrying WITHOUT cookies...", flush=True)
-                            ydl_opts_no_cookie = dict(ydl_opts_skip)
+                            ydl_opts_no_cookie = dict(ydl_opts_hls_only)
                             ydl_opts_no_cookie.pop('cookiefile', None)
                             info = _do_extract(ydl_opts_no_cookie)
                         else:
                             raise first_err
-                elif cookie_file:
-                    print(f"[EXTRACT_VIDEO] Extraction with cookies failed ({first_err}). Retrying WITHOUT cookies...", flush=True)
-                    ydl_opts_no_cookie = dict(ydl_opts)
-                    ydl_opts_no_cookie.pop('cookiefile', None)
-                    info = _do_extract(ydl_opts_no_cookie)
                 else:
-                    raise first_err
+                    try:
+                        ydl_opts_hls = dict(ydl_opts)
+                        ydl_opts_hls['extractor_args'] = {
+                            'youtube': {
+                                'player_client': ['web_safari'],
+                                'player_skip': ['configs'],
+                                'formats': ['missing_pot'],
+                            }
+                        }
+                        hls_info = _do_extract(ydl_opts_hls)
+                        if hls_info and hls_info.get('formats'):
+                            info_formats = info.setdefault('formats', [])
+                            seen_urls = {fmt.get('url') for fmt in info_formats if fmt.get('url')}
+                            added_hls = 0
+                            for fmt in hls_info.get('formats', []):
+                                fmt_url = fmt.get('url') or ''
+                                proto = str(fmt.get('protocol') or '').lower()
+                                fmt_ext = str(fmt.get('ext') or '').lower()
+                                if not fmt_url or fmt_url in seen_urls:
+                                    continue
+                                if 'm3u8' not in proto and '.m3u8' not in fmt_url.lower() and fmt_ext != 'm3u8':
+                                    continue
+                                info_formats.append(fmt)
+                                seen_urls.add(fmt_url)
+                                added_hls += 1
+                            print(f"[EXTRACT_VIDEO] YouTube: added {added_hls} web_safari HLS formats", flush=True)
+                    except Exception as hls_err:
+                        print(f"[EXTRACT_VIDEO] YouTube web_safari HLS augmentation skipped: {hls_err}", flush=True)
+            else:
+                try:
+                    info = _do_extract(ydl_opts)
+                except Exception as first_err:
+                    if cookie_file:
+                        print(f"[EXTRACT_VIDEO] Extraction with cookies failed ({first_err}). Retrying WITHOUT cookies...", flush=True)
+                        ydl_opts_no_cookie = dict(ydl_opts)
+                        ydl_opts_no_cookie.pop('cookiefile', None)
+                        info = _do_extract(ydl_opts_no_cookie)
+                    else:
+                        raise first_err
 
         if not info:
             return json.dumps({
@@ -872,6 +900,7 @@ def extract_video(video_url, cookies_str=None, platform=None):
                 'filesize': f_size,
                 'size_mb': f_size_mb,
                 'abr': abr_clean,
+                'is_hls': is_hls,
             })
 
         # ── Filter & Deduplicate Formats ──────────────────────────────────────
@@ -906,14 +935,17 @@ def extract_video(video_url, cookies_str=None, platform=None):
         if high_video_fmts:
             raw_video_fmts = high_video_fmts
 
-        # 5. Sort video: prefer has_any_audio (muxable or progressive), height desc, H.264/AVC codec (for MediaMuxer compatibility), native audio, MP4, then filesize
+        # 5. Sort video: prefer playable audio, height, HLS for YouTube HD, H.264/AVC codec,
+        # native audio, MP4, then filesize. HLS is preferred over missing-PO DASH at the
+        # same resolution because it is the current token-free HD path.
         def _video_sort_key(f):
             has_any_audio = 1 if (f.get('has_audio') or f.get('audio_url')) else 0
             vc_str = (f.get('vcodec') or '').lower()
+            is_hls = 1 if f.get('is_hls') else 0
             is_h264 = 1 if ('avc' in vc_str or 'h264' in vc_str) else 0
             native_audio = 1 if f.get('has_audio') else 0
             is_mp4 = 1 if (f.get('ext') or '').upper() == 'MP4' else 0
-            return (has_any_audio, f.get('height', 0), is_h264, native_audio, is_mp4, f.get('filesize', 0))
+            return (has_any_audio, f.get('height', 0), is_hls, is_h264, native_audio, is_mp4, f.get('filesize', 0))
 
         raw_video_fmts.sort(key=_video_sort_key, reverse=True)
 
