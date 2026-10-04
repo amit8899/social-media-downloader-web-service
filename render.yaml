@@ -22,7 +22,9 @@ services:
       npx tsc
 
     startCommand: >
-      sh -c 'node vendor/bgutil-ytdlp-pot-provider/server/build/main.js --host 127.0.0.1 --port 4416 &
+      sh -c 'cd vendor/bgutil-ytdlp-pot-provider/server &&
+      node build/main.js --host 127.0.0.1 --port 4416 &
+      cd /opt/render/project/src &&
       sleep 3 &&
       uvicorn main:app --host 0.0.0.0 --port $PORT'
 
