@@ -3,6 +3,8 @@ import json
 import os
 import re
 import tempfile
+import urllib.parse
+import urllib.request
 
 def _format_size(size_bytes):
     if not size_bytes or size_bytes <= 0:
@@ -17,6 +19,48 @@ def _format_size(size_bytes):
     if kb >= 1.0:
         return f'{kb:.1f} KB'
     return f'{size_bytes} B'
+
+
+SERVER_BASE_URL = 'https://social-media-video-downloader-2va3.onrender.com'
+
+
+def _fetch_server_hls_formats(video_url):
+    try:
+        query = urllib.parse.urlencode({'url': video_url})
+        endpoint = f'{SERVER_BASE_URL}/api/youtube/hls-formats?{query}'
+        req = urllib.request.Request(endpoint, headers={'Accept': 'application/json'})
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            body = resp.read().decode('utf-8', errors='ignore')
+        data = json.loads(body)
+        if not data.get('success'):
+            print(f"[EXTRACT_VIDEO] Server HLS extraction failed: {data.get('error')}", flush=True)
+            return []
+        formats = data.get('formats') or []
+        print(f"[EXTRACT_VIDEO] Server returned {len(formats)} web_safari HLS formats", flush=True)
+        return formats
+    except Exception as e:
+        print(f"[EXTRACT_VIDEO] Server HLS request failed: {e}", flush=True)
+        return []
+
+
+def _append_unique_hls_formats(info, hls_formats):
+    if not info or not hls_formats:
+        return 0
+    info_formats = info.setdefault('formats', [])
+    seen_urls = {fmt.get('url') for fmt in info_formats if fmt.get('url')}
+    added = 0
+    for fmt in hls_formats:
+        fmt_url = fmt.get('url') or ''
+        if not fmt_url or fmt_url in seen_urls:
+            continue
+        proto = str(fmt.get('protocol') or '').lower()
+        fmt_ext = str(fmt.get('ext') or '').lower()
+        if 'm3u8' not in proto and '.m3u8' not in fmt_url.lower() and fmt_ext != 'm3u8':
+            continue
+        info_formats.append(fmt)
+        seen_urls.add(fmt_url)
+        added += 1
+    return added
 
 
 # Hot-patch yt-dlp's facebook extractor with updated DASH / delivery fragment parser
@@ -589,23 +633,15 @@ def extract_video(video_url, cookies_str=None, platform=None):
                         }
                         hls_info = _do_extract(ydl_opts_hls)
                         if hls_info and hls_info.get('formats'):
-                            info_formats = info.setdefault('formats', [])
-                            seen_urls = {fmt.get('url') for fmt in info_formats if fmt.get('url')}
-                            added_hls = 0
-                            for fmt in hls_info.get('formats', []):
-                                fmt_url = fmt.get('url') or ''
-                                proto = str(fmt.get('protocol') or '').lower()
-                                fmt_ext = str(fmt.get('ext') or '').lower()
-                                if not fmt_url or fmt_url in seen_urls:
-                                    continue
-                                if 'm3u8' not in proto and '.m3u8' not in fmt_url.lower() and fmt_ext != 'm3u8':
-                                    continue
-                                info_formats.append(fmt)
-                                seen_urls.add(fmt_url)
-                                added_hls += 1
-                            print(f"[EXTRACT_VIDEO] YouTube: added {added_hls} web_safari HLS formats", flush=True)
+                            added_hls = _append_unique_hls_formats(info, hls_info.get('formats') or [])
+                            print(f"[EXTRACT_VIDEO] YouTube: added {added_hls} local web_safari HLS formats", flush=True)
                     except Exception as hls_err:
                         print(f"[EXTRACT_VIDEO] YouTube web_safari HLS augmentation skipped: {hls_err}", flush=True)
+
+                    server_hls = _fetch_server_hls_formats(video_url)
+                    added_server_hls = _append_unique_hls_formats(info, server_hls)
+                    if added_server_hls > 0:
+                        print(f"[EXTRACT_VIDEO] YouTube: added {added_server_hls} server web_safari HLS formats", flush=True)
             else:
                 try:
                     info = _do_extract(ydl_opts)

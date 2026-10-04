@@ -10,6 +10,7 @@ Endpoints:
   GET  /ping           Keep-alive / Render cold-start prevention
   POST /extract        Normalized extraction (new, preferred)
   GET  /download       Legacy backward-compat endpoint (kept during migration)
+  GET  /api/youtube/hls-formats  YouTube web_safari HLS extraction experiment
   GET  /diagnostics    Development-only: yt-dlp/FFmpeg/runtime diagnostics
   GET  /               API info root
 
@@ -93,6 +94,7 @@ async def root():
             "POST /extract": "Normalized extraction (preferred)",
             "GET /download":  "Legacy endpoint (backward compat)",
             "GET /api/extractors/latest": "Latest dynamic Python extractor script",
+            "GET /api/youtube/hls-formats": "YouTube web_safari HLS extraction experiment",
             "GET /health":    "Health check",
             "GET /diagnostics": "Dev diagnostics (remove before production)",
         },
@@ -103,7 +105,7 @@ async def root():
 
 EXTRACTOR_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "extract_video.py")
 FACEBOOK_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "facebook_updated.py")
-EXTRACTOR_VERSION = int(os.getenv("EXTRACTOR_VERSION", "15"))
+EXTRACTOR_VERSION = int(os.getenv("EXTRACTOR_VERSION", "16"))
 
 @app.get("/api/extractors/latest")
 async def get_latest_extractor():
@@ -129,6 +131,77 @@ async def get_latest_extractor():
         "script": script_content,
         "facebook_script": fb_content,
         "timestamp": int(os.path.getmtime(EXTRACTOR_SCRIPT_PATH)),
+    }
+
+
+# ── YouTube HLS Extraction Experiment ─────────────────────────────────────────
+
+@app.get("/api/youtube/hls-formats")
+async def get_youtube_hls_formats(url: str = Query(..., description="YouTube URL")):
+    """
+    Extract web_safari HLS formats on the server where a JavaScript/EJS runtime
+    is available. Android still downloads the returned m3u8 URLs directly.
+    This is an experiment: some YouTube HLS URLs may still be IP/session bound.
+    """
+    opts = {
+        "quiet": True,
+        "no_warnings": False,
+        "skip_download": True,
+        "socket_timeout": 30,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web_safari"],
+                "player_skip": ["configs"],
+                "formats": ["missing_pot"],
+            }
+        },
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as exc:
+        logger.warning("YouTube HLS extraction failed: %s", exc)
+        return JSONResponse(
+            status_code=502,
+            content={"success": False, "error": str(exc), "formats": []},
+        )
+
+    hls_formats = []
+    seen_urls = set()
+    for fmt in info.get("formats") or []:
+        fmt_url = fmt.get("url") or ""
+        protocol = str(fmt.get("protocol") or "").lower()
+        ext = str(fmt.get("ext") or "").lower()
+        vcodec = str(fmt.get("vcodec") or "none").lower()
+        if not fmt_url or fmt_url in seen_urls:
+            continue
+        if "m3u8" not in protocol and ".m3u8" not in fmt_url.lower() and ext != "m3u8":
+            continue
+        if "vp09" in vcodec or "vp9" in vcodec or "av01" in vcodec or "av1" in vcodec:
+            continue
+        seen_urls.add(fmt_url)
+        hls_formats.append({
+            "format_id": str(fmt.get("format_id") or "hls"),
+            "url": fmt_url,
+            "height": fmt.get("height") or 0,
+            "width": fmt.get("width") or 0,
+            "ext": "mp4",
+            "protocol": fmt.get("protocol") or "m3u8_native",
+            "vcodec": fmt.get("vcodec") or "h264",
+            "acodec": fmt.get("acodec") or "aac",
+            "filesize": fmt.get("filesize") or 0,
+            "filesize_approx": fmt.get("filesize_approx") or 0,
+            "tbr": fmt.get("tbr") or 0,
+        })
+
+    hls_formats.sort(key=lambda f: f.get("height") or 0, reverse=True)
+    return {
+        "success": True,
+        "title": info.get("title") or "",
+        "duration": info.get("duration") or 0,
+        "thumbnail": info.get("thumbnail") or "",
+        "formats": hls_formats,
     }
 
 

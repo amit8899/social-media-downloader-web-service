@@ -6,7 +6,8 @@ services:
     region: oregon                  # or your preferred region
 
     buildCommand: >
-      apt-get install -y ffmpeg &&
+      apt-get update &&
+      apt-get install -y ffmpeg nodejs npm &&
       pip install
       "yt-dlp[default]>=2025.7.21"
       "fastapi>=0.116.1"
