@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import time
 import urllib.request
 import uuid
@@ -138,6 +139,78 @@ async def get_latest_extractor():
     }
 
 
+# ── Local bgutil provider lifecycle ───────────────────────────────────────────
+
+_BGUTIL_PROCESS = None
+
+
+def _bgutil_server_dir() -> str:
+    return os.getenv(
+        "BGUTIL_SERVER_DIR",
+        os.path.join(os.path.dirname(__file__), "vendor", "bgutil-ytdlp-pot-provider", "server"),
+    )
+
+
+def _bgutil_ping_ok() -> bool:
+    ping_url = os.getenv("BGUTIL_PING_URL", "http://127.0.0.1:4416/ping")
+    try:
+        req = urllib.request.Request(ping_url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return 200 <= resp.status < 300
+    except Exception:
+        return False
+
+
+def _ensure_bgutil_provider_running() -> None:
+    global _BGUTIL_PROCESS
+    if _bgutil_ping_ok():
+        logger.info("bgutil PO provider already reachable on 127.0.0.1:4416")
+        return
+
+    server_dir = _bgutil_server_dir()
+    entrypoint = os.path.join(server_dir, "build", "main.js")
+    if not os.path.exists(entrypoint):
+        logger.warning("bgutil PO provider entrypoint missing: %s", entrypoint)
+        return
+
+    try:
+        logger.info("Starting bgutil PO provider from %s", server_dir)
+        _BGUTIL_PROCESS = subprocess.Popen(
+            ["node", "build/main.js", "--host", "127.0.0.1", "--port", "4416"],
+            cwd=server_dir,
+        )
+        time.sleep(3)
+        if _bgutil_ping_ok():
+            logger.info("bgutil PO provider is reachable after startup")
+        else:
+            rc = _BGUTIL_PROCESS.poll() if _BGUTIL_PROCESS else None
+            logger.warning("bgutil PO provider still unreachable after startup; process returncode=%s", rc)
+    except Exception as exc:
+        logger.warning("Failed to start bgutil PO provider: %s", exc)
+
+
+@app.on_event("startup")
+async def startup_bgutil_provider():
+    _ensure_bgutil_provider_running()
+
+
+@app.get("/api/youtube/po-token/status")
+async def get_youtube_po_token_status(
+    x_app_token: Optional[str] = Header(default=None, alias="X-App-Token"),
+):
+    expected_token = os.getenv("YOUTUBE_PO_API_TOKEN", "").strip()
+    if not expected_token or not x_app_token or x_app_token.strip() != expected_token:
+        return JSONResponse(status_code=401, content={"success": False, "error": "Unauthorized"})
+    server_dir = _bgutil_server_dir()
+    return {
+        "success": True,
+        "provider_reachable": _bgutil_ping_ok(),
+        "server_dir": server_dir,
+        "entrypoint_exists": os.path.exists(os.path.join(server_dir, "build", "main.js")),
+        "process_returncode": _BGUTIL_PROCESS.poll() if _BGUTIL_PROCESS else None,
+    }
+
+
 # ── YouTube PO Token Helper ───────────────────────────────────────────────────
 
 def _extract_youtube_video_id(url: str) -> str:
@@ -205,6 +278,8 @@ async def get_youtube_po_token(
             status_code=400,
             content={"success": False, "error": "Invalid YouTube URL or video ID"},
         )
+
+    _ensure_bgutil_provider_running()
 
     try:
         data = _request_bgutil_po_token(video_id)
