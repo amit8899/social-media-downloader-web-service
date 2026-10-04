@@ -18,9 +18,12 @@ See README.md for migration guide.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 import time
+import urllib.request
 import uuid
 from typing import Optional
 
@@ -95,6 +98,7 @@ async def root():
             "GET /download":  "Legacy endpoint (backward compat)",
             "GET /api/extractors/latest": "Latest dynamic Python extractor script",
             "GET /api/youtube/hls-formats": "YouTube web_safari HLS extraction experiment",
+            "GET /api/youtube/po-token": "Guarded YouTube GVS PO-token helper",
             "GET /health":    "Health check",
             "GET /diagnostics": "Dev diagnostics (remove before production)",
         },
@@ -105,7 +109,7 @@ async def root():
 
 EXTRACTOR_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "extract_video.py")
 FACEBOOK_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "facebook_updated.py")
-EXTRACTOR_VERSION = int(os.getenv("EXTRACTOR_VERSION", "16"))
+EXTRACTOR_VERSION = int(os.getenv("EXTRACTOR_VERSION", "17"))
 
 @app.get("/api/extractors/latest")
 async def get_latest_extractor():
@@ -131,6 +135,99 @@ async def get_latest_extractor():
         "script": script_content,
         "facebook_script": fb_content,
         "timestamp": int(os.path.getmtime(EXTRACTOR_SCRIPT_PATH)),
+    }
+
+
+# ── YouTube PO Token Helper ───────────────────────────────────────────────────
+
+def _extract_youtube_video_id(url: str) -> str:
+    if not url:
+        return ""
+    patterns = (
+        r"(?:v=|/shorts/|/embed/|/live/)([0-9A-Za-z_-]{11})",
+        r"youtu\.be/([0-9A-Za-z_-]{11})",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    if re.fullmatch(r"[0-9A-Za-z_-]{11}", url):
+        return url
+    return ""
+
+
+def _request_bgutil_po_token(video_id: str) -> dict:
+    provider_url = os.getenv("BGUTIL_PROVIDER_URL", "http://127.0.0.1:4416/get_pot")
+    payload = json.dumps({
+        "content_binding": video_id,
+        "proxy": "",
+        "bypass_cache": False,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        provider_url,
+        data=payload,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=35) as resp:
+        body = resp.read().decode("utf-8", errors="ignore")
+    return json.loads(body or "{}")
+
+
+@app.get("/api/youtube/po-token")
+async def get_youtube_po_token(
+    url: str = Query(..., description="YouTube URL or video ID"),
+    x_app_token: Optional[str] = Header(default=None, alias="X-App-Token"),
+):
+    """
+    Generates a GVS PO token for the requested YouTube video.
+    Android still performs yt-dlp extraction and media download locally; this
+    endpoint only supplies the proof-of-origin token helper data.
+    """
+    expected_token = os.getenv("YOUTUBE_PO_API_TOKEN", "").strip()
+    if not expected_token:
+        return JSONResponse(
+            status_code=503,
+            content={"success": False, "error": "PO token helper is not configured"},
+        )
+    if not x_app_token or x_app_token.strip() != expected_token:
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "error": "Unauthorized"},
+        )
+
+    video_id = _extract_youtube_video_id(url)
+    if not video_id:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": "Invalid YouTube URL or video ID"},
+        )
+
+    try:
+        data = _request_bgutil_po_token(video_id)
+    except Exception as exc:
+        logger.warning("YouTube PO token generation failed for %s: %s", video_id, exc)
+        return JSONResponse(
+            status_code=502,
+            content={"success": False, "error": str(exc), "video_id": video_id},
+        )
+
+    po_token = data.get("poToken") or data.get("po_token") or data.get("pot") or ""
+    if not po_token:
+        return JSONResponse(
+            status_code=502,
+            content={"success": False, "error": "Provider returned no poToken", "video_id": video_id},
+        )
+
+    return {
+        "success": True,
+        "video_id": video_id,
+        "client": "mweb",
+        "scope": "gvs",
+        "po_token": po_token,
     }
 
 

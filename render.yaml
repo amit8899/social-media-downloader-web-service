@@ -7,15 +7,22 @@ services:
 
     buildCommand: >
       apt-get update &&
-      apt-get install -y ffmpeg nodejs npm &&
+      apt-get install -y ffmpeg nodejs npm git &&
       pip install
       "yt-dlp[default]>=2025.7.21"
       "fastapi>=0.116.1"
       "uvicorn>=0.35.0"
       "python-dotenv>=1.1.1"
-      "python-multipart>=0.0.20"
+      "python-multipart>=0.0.20" &&
+      rm -rf /tmp/bgutil-ytdlp-pot-provider &&
+      git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git /tmp/bgutil-ytdlp-pot-provider &&
+      cd /tmp/bgutil-ytdlp-pot-provider/server &&
+      npm ci &&
+      npx tsc
 
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    startCommand: >
+      sh -c 'node /tmp/bgutil-ytdlp-pot-provider/server/build/main.js --host 127.0.0.1 --port 4416 &
+      uvicorn main:app --host 0.0.0.0 --port $PORT'
 
     healthCheckPath: /health        # uses the cheap GET /health (does NOT call yt-dlp)
 
@@ -24,3 +31,7 @@ services:
         value: INFO
       - key: PORT
         value: "10000"             # Render assigns this automatically — keep as placeholder
+      - key: YOUTUBE_PO_API_TOKEN
+        sync: false
+      - key: BGUTIL_PROVIDER_URL
+        value: "http://127.0.0.1:4416/get_pot"

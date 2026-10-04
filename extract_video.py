@@ -3,8 +3,6 @@ import json
 import os
 import re
 import tempfile
-import urllib.parse
-import urllib.request
 
 def _format_size(size_bytes):
     if not size_bytes or size_bytes <= 0:
@@ -19,48 +17,6 @@ def _format_size(size_bytes):
     if kb >= 1.0:
         return f'{kb:.1f} KB'
     return f'{size_bytes} B'
-
-
-SERVER_BASE_URL = 'https://social-media-video-downloader-2va3.onrender.com'
-
-
-def _fetch_server_hls_formats(video_url):
-    try:
-        query = urllib.parse.urlencode({'url': video_url})
-        endpoint = f'{SERVER_BASE_URL}/api/youtube/hls-formats?{query}'
-        req = urllib.request.Request(endpoint, headers={'Accept': 'application/json'})
-        with urllib.request.urlopen(req, timeout=45) as resp:
-            body = resp.read().decode('utf-8', errors='ignore')
-        data = json.loads(body)
-        if not data.get('success'):
-            print(f"[EXTRACT_VIDEO] Server HLS extraction failed: {data.get('error')}", flush=True)
-            return []
-        formats = data.get('formats') or []
-        print(f"[EXTRACT_VIDEO] Server returned {len(formats)} web_safari HLS formats", flush=True)
-        return formats
-    except Exception as e:
-        print(f"[EXTRACT_VIDEO] Server HLS request failed: {e}", flush=True)
-        return []
-
-
-def _append_unique_hls_formats(info, hls_formats):
-    if not info or not hls_formats:
-        return 0
-    info_formats = info.setdefault('formats', [])
-    seen_urls = {fmt.get('url') for fmt in info_formats if fmt.get('url')}
-    added = 0
-    for fmt in hls_formats:
-        fmt_url = fmt.get('url') or ''
-        if not fmt_url or fmt_url in seen_urls:
-            continue
-        proto = str(fmt.get('protocol') or '').lower()
-        fmt_ext = str(fmt.get('ext') or '').lower()
-        if 'm3u8' not in proto and '.m3u8' not in fmt_url.lower() and fmt_ext != 'm3u8':
-            continue
-        info_formats.append(fmt)
-        seen_urls.add(fmt_url)
-        added += 1
-    return added
 
 
 # Hot-patch yt-dlp's facebook extractor with updated DASH / delivery fragment parser
@@ -433,7 +389,7 @@ def _is_video_entry(entry, eu=''):
     return False
 
 
-def extract_video(video_url, cookies_str=None, platform=None):
+def extract_video(video_url, cookies_str=None, platform=None, youtube_po_token=None):
     """
     Extract a direct stream URL from any yt-dlp-supported platform.
 
@@ -497,17 +453,23 @@ def extract_video(video_url, cookies_str=None, platform=None):
                 'Accept-Language': 'en-US,en;q=0.9',
             }
 
-        # For YouTube, first use the Android client for reliable metadata and progressive
-        # streams, then augment with web_safari HLS formats after extraction. HLS is the
-        # best non-PO-token path for HD when DASH GoogleVideo URLs return HTTP 403.
+        # YouTube HD requires a GVS PO token for DASH URLs. When Java supplies
+        # one, use the mweb client with mweb.gvs+token so yt-dlp generates URLs
+        # locally from the phone IP. Without a token, keep the old android path
+        # so progressive formats still work and HD can be shown as diagnostic only.
         if platform == 'youtube':
-            ydl_opts['extractor_args'] = {
-                'youtube': {
-                    'player_client': ['android'],
-                    'player_skip': ['webpage', 'configs'],
-                    'formats': ['missing_pot'],
-                }
+            yt_args = {
+                'player_skip': ['webpage', 'configs'],
             }
+            if youtube_po_token:
+                yt_args['player_client'] = ['mweb']
+                yt_args['po_token'] = [f'mweb.gvs+{youtube_po_token}']
+                print('[EXTRACT_VIDEO] YouTube: using supplied mweb GVS PO token', flush=True)
+            else:
+                yt_args['player_client'] = ['android']
+                yt_args['formats'] = ['missing_pot']
+                print('[EXTRACT_VIDEO] YouTube: no PO token supplied, using android missing_pot path', flush=True)
+            ydl_opts['extractor_args'] = {'youtube': yt_args}
         elif platform == 'facebook':
             # For Facebook: allow best video + audio or best standalone format or image
             ydl_opts['format'] = 'bestvideo*+bestaudio/best[ext=mp4]/best/bestvideo/bestaudio/image/all'
@@ -601,47 +563,13 @@ def extract_video(video_url, cookies_str=None, platform=None):
                 try:
                     info = _do_extract(ydl_opts)
                 except Exception as first_err:
-                    print(f"[EXTRACT_VIDEO] YouTube Android extraction failed ({first_err}). Trying web_safari HLS...", flush=True)
-                    ydl_opts_hls_only = dict(ydl_opts)
-                    ydl_opts_hls_only['extractor_args'] = {
-                        'youtube': {
-                            'player_client': ['web_safari'],
-                            'player_skip': ['configs'],
-                            'formats': ['missing_pot'],
-                        }
-                    }
-                    try:
-                        info = _do_extract(ydl_opts_hls_only)
-                    except Exception as second_err:
-                        print(f"[EXTRACT_VIDEO] YouTube web_safari HLS extraction failed: {second_err}", flush=True)
-                        if cookie_file:
-                            print("[EXTRACT_VIDEO] Retrying WITHOUT cookies...", flush=True)
-                            ydl_opts_no_cookie = dict(ydl_opts_hls_only)
-                            ydl_opts_no_cookie.pop('cookiefile', None)
-                            info = _do_extract(ydl_opts_no_cookie)
-                        else:
-                            raise first_err
-                else:
-                    try:
-                        ydl_opts_hls = dict(ydl_opts)
-                        ydl_opts_hls['extractor_args'] = {
-                            'youtube': {
-                                'player_client': ['web_safari'],
-                                'player_skip': ['configs'],
-                                'formats': ['missing_pot'],
-                            }
-                        }
-                        hls_info = _do_extract(ydl_opts_hls)
-                        if hls_info and hls_info.get('formats'):
-                            added_hls = _append_unique_hls_formats(info, hls_info.get('formats') or [])
-                            print(f"[EXTRACT_VIDEO] YouTube: added {added_hls} local web_safari HLS formats", flush=True)
-                    except Exception as hls_err:
-                        print(f"[EXTRACT_VIDEO] YouTube web_safari HLS augmentation skipped: {hls_err}", flush=True)
-
-                    server_hls = _fetch_server_hls_formats(video_url)
-                    added_server_hls = _append_unique_hls_formats(info, server_hls)
-                    if added_server_hls > 0:
-                        print(f"[EXTRACT_VIDEO] YouTube: added {added_server_hls} server web_safari HLS formats", flush=True)
+                    if cookie_file:
+                        print(f"[EXTRACT_VIDEO] YouTube extraction with cookies failed ({first_err}). Retrying WITHOUT cookies...", flush=True)
+                        ydl_opts_no_cookie = dict(ydl_opts)
+                        ydl_opts_no_cookie.pop('cookiefile', None)
+                        info = _do_extract(ydl_opts_no_cookie)
+                    else:
+                        raise first_err
             else:
                 try:
                     info = _do_extract(ydl_opts)
@@ -807,6 +735,10 @@ def extract_video(video_url, cookies_str=None, platform=None):
 
         if not is_video and title.startswith('Video by '):
             title = 'Photo by ' + title[len('Video by '):]
+
+        artist = info.get('artist') or info.get('creator') or info.get('uploader') or info.get('channel') or ''
+        album = info.get('album') or ''
+        genre = info.get('genre') or ''
 
         thumbnail = info.get('thumbnail') or ''
         if not thumbnail and stream_url and not is_video:
@@ -1041,6 +973,9 @@ def extract_video(video_url, cookies_str=None, platform=None):
             'urls': [stream_url] if stream_url else [],
             'url': stream_url,
             'title': title,
+            'artist': artist,
+            'album': album,
+            'genre': genre,
             'thumbnail': thumbnail,
             'thumbnails': [thumbnail] if thumbnail else [],
             'size_mb': size_mb,
@@ -1072,3 +1007,92 @@ def extract_video(video_url, cookies_str=None, platform=None):
                 os.unlink(cookie_file)
             except Exception:
                 pass
+
+
+def tag_audio_file(file_path, title='', artist='', album='', genre='', thumbnail_url='', cover_path=''):
+    """
+    Tags an audio file (.m4a, .mp4, .mp3) with metadata and album art using mutagen.
+    """
+    import os
+    if not file_path or not os.path.exists(file_path):
+        print(f"[TAG_AUDIO] File not found: {file_path}", flush=True)
+        return False
+
+    cover_data = None
+    if cover_path and os.path.exists(cover_path):
+        try:
+            with open(cover_path, 'rb') as f:
+                cover_data = f.read()
+        except Exception as e:
+            print(f"[TAG_AUDIO] Failed to read cover_path: {e}", flush=True)
+
+    if not cover_data and thumbnail_url:
+        try:
+            import urllib.request
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            req = urllib.request.Request(
+                thumbnail_url,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            )
+            with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+                cover_data = resp.read()
+            print(f"[TAG_AUDIO] Downloaded cover art, size={len(cover_data)} bytes", flush=True)
+        except Exception as e:
+            print(f"[TAG_AUDIO] Failed downloading thumbnail {thumbnail_url}: {e}", flush=True)
+
+    file_lower = file_path.lower()
+    success = False
+
+    # Tag M4A / MP4
+    if file_lower.endswith('.m4a') or file_lower.endswith('.mp4'):
+        try:
+            from mutagen.mp4 import MP4, MP4Cover
+            audio = MP4(file_path)
+            if title:
+                audio['\xa9nam'] = [str(title)]
+            if artist:
+                audio['\xa9ART'] = [str(artist)]
+                audio['aART'] = [str(artist)]
+            if album:
+                audio['\xa9alb'] = [str(album)]
+            if genre:
+                audio['\xa9gen'] = [str(genre)]
+            if cover_data:
+                fmt = MP4Cover.FORMAT_PNG if cover_data.startswith(b'\x89PNG') else MP4Cover.FORMAT_JPEG
+                audio['covr'] = [MP4Cover(cover_data, imageformat=fmt)]
+            audio.save()
+            print(f"[TAG_AUDIO] Tagged M4A successfully: title='{title}', artist='{artist}', album='{album}', genre='{genre}', cover={cover_data is not None}", flush=True)
+            success = True
+        except Exception as e:
+            print(f"[TAG_AUDIO] Error tagging M4A: {e}", flush=True)
+
+    # Tag MP3
+    elif file_lower.endswith('.mp3'):
+        try:
+            from mutagen.id3 import ID3, TIT2, TPE1, TPE2, TALB, TCON, APIC, ID3NoHeaderError
+            try:
+                tags = ID3(file_path)
+            except ID3NoHeaderError:
+                tags = ID3()
+            if title:
+                tags.add(TIT2(encoding=3, text=str(title)))
+            if artist:
+                tags.add(TPE1(encoding=3, text=str(artist)))
+                tags.add(TPE2(encoding=3, text=str(artist)))
+            if album:
+                tags.add(TALB(encoding=3, text=str(album)))
+            if genre:
+                tags.add(TCON(encoding=3, text=str(genre)))
+            if cover_data:
+                mime = 'image/png' if cover_data.startswith(b'\x89PNG') else 'image/jpeg'
+                tags.add(APIC(encoding=3, mime=mime, type=3, desc='Cover', data=cover_data))
+            tags.save(file_path, v2_version=3)
+            print(f"[TAG_AUDIO] Tagged MP3 successfully: title='{title}', artist='{artist}', album='{album}', genre='{genre}', cover={cover_data is not None}", flush=True)
+            success = True
+        except Exception as e:
+            print(f"[TAG_AUDIO] Error tagging MP3: {e}", flush=True)
+
+    return success
