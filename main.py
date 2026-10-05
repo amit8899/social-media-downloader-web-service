@@ -171,11 +171,25 @@ def _ensure_bgutil_provider_running() -> None:
     entrypoint = os.path.join(server_dir, "build", "main.js")
     if not os.path.exists(entrypoint):
         logger.warning("bgutil PO provider entrypoint missing: %s", entrypoint)
+        repo_dir = os.path.join(os.path.dirname(__file__), "vendor", "bgutil-ytdlp-pot-provider")
+        if not os.path.exists(repo_dir):
+            try:
+                logger.info("Auto-cloning bgutil-ytdlp-pot-provider into %s...", repo_dir)
+                os.makedirs(os.path.dirname(repo_dir), exist_ok=True)
+                subprocess.run(
+                    ["git", "clone", "--depth", "1", "https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git", repo_dir],
+                    check=True,
+                    timeout=60,
+                )
+            except Exception as exc:
+                logger.warning("Auto-clone of bgutil provider failed: %s", exc)
+                return
+
         if os.path.exists(os.path.join(server_dir, "package.json")):
             try:
                 logger.info("Attempting auto-build of bgutil provider in %s", server_dir)
-                subprocess.run(["npm", "ci"], cwd=server_dir, check=True)
-                subprocess.run(["npx", "tsc"], cwd=server_dir, check=True)
+                subprocess.run(["npm", "ci"], cwd=server_dir, check=True, timeout=120)
+                subprocess.run(["npx", "tsc"], cwd=server_dir, check=True, timeout=60)
             except Exception as exc:
                 logger.warning("Auto-build of bgutil provider failed: %s", exc)
                 return
