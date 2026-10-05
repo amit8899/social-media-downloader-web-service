@@ -460,13 +460,12 @@ def extract_video(video_url, cookies_str=None, platform=None, youtube_po_token=N
         if platform == 'youtube':
             yt_args = {
                 'player_skip': ['webpage', 'configs'],
+                'player_client': ['android'],
             }
             if youtube_po_token:
-                yt_args['player_client'] = ['mweb']
-                yt_args['po_token'] = [f'mweb.gvs+{youtube_po_token}']
-                print('[EXTRACT_VIDEO] YouTube: using supplied mweb GVS PO token', flush=True)
+                yt_args['po_token'] = [f'android.gvs+{youtube_po_token}']
+                print('[EXTRACT_VIDEO] YouTube: using supplied android GVS PO token', flush=True)
             else:
-                yt_args['player_client'] = ['android']
                 yt_args['formats'] = ['missing_pot']
                 print('[EXTRACT_VIDEO] YouTube: no PO token supplied, using android missing_pot path', flush=True)
             ydl_opts['extractor_args'] = {'youtube': yt_args}

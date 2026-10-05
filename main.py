@@ -110,7 +110,7 @@ async def root():
 
 EXTRACTOR_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "extract_video.py")
 FACEBOOK_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "facebook_updated.py")
-EXTRACTOR_VERSION = int(os.getenv("EXTRACTOR_VERSION", "17"))
+EXTRACTOR_VERSION = int(os.getenv("EXTRACTOR_VERSION", "18"))
 
 @app.get("/api/extractors/latest")
 async def get_latest_extractor():
@@ -171,7 +171,16 @@ def _ensure_bgutil_provider_running() -> None:
     entrypoint = os.path.join(server_dir, "build", "main.js")
     if not os.path.exists(entrypoint):
         logger.warning("bgutil PO provider entrypoint missing: %s", entrypoint)
-        return
+        if os.path.exists(os.path.join(server_dir, "package.json")):
+            try:
+                logger.info("Attempting auto-build of bgutil provider in %s", server_dir)
+                subprocess.run(["npm", "ci"], cwd=server_dir, check=True)
+                subprocess.run(["npx", "tsc"], cwd=server_dir, check=True)
+            except Exception as exc:
+                logger.warning("Auto-build of bgutil provider failed: %s", exc)
+                return
+        else:
+            return
 
     try:
         logger.info("Starting bgutil PO provider from %s", server_dir)
@@ -300,7 +309,7 @@ async def get_youtube_po_token(
     return {
         "success": True,
         "video_id": video_id,
-        "client": "mweb",
+        "client": "android",
         "scope": "gvs",
         "po_token": po_token,
     }
