@@ -202,12 +202,13 @@ def _ensure_bgutil_provider_running() -> None:
             ["node", "build/main.js", "--host", "127.0.0.1", "--port", "4416"],
             cwd=server_dir,
         )
-        time.sleep(3)
-        if _bgutil_ping_ok():
-            logger.info("bgutil PO provider is reachable after startup")
-        else:
-            rc = _BGUTIL_PROCESS.poll() if _BGUTIL_PROCESS else None
-            logger.warning("bgutil PO provider still unreachable after startup; process returncode=%s", rc)
+        for _ in range(20):
+            time.sleep(0.5)
+            if _bgutil_ping_ok():
+                logger.info("bgutil PO provider is reachable after startup")
+                return
+        rc = _BGUTIL_PROCESS.poll() if _BGUTIL_PROCESS else None
+        logger.warning("bgutil PO provider still unreachable after startup; process returncode=%s", rc)
     except Exception as exc:
         logger.warning("Failed to start bgutil PO provider: %s", exc)
 
