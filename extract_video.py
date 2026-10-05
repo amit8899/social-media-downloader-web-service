@@ -389,7 +389,7 @@ def _is_video_entry(entry, eu=''):
     return False
 
 
-def extract_video(video_url, cookies_str=None, platform=None, youtube_po_token=None):
+def extract_video(video_url, cookies_str=None, platform=None):
     """
     Extract a direct stream URL from any yt-dlp-supported platform.
 
@@ -453,22 +453,19 @@ def extract_video(video_url, cookies_str=None, platform=None, youtube_po_token=N
                 'Accept-Language': 'en-US,en;q=0.9',
             }
 
-        # YouTube HD requires a GVS PO token for DASH URLs. When Java supplies
-        # one, use the mweb client with mweb.gvs+token so yt-dlp generates URLs
-        # locally from the phone IP. Without a token, keep the old android path
-        # so progressive formats still work and HD can be shown as diagnostic only.
+        # For YouTube: use android client with missing_pot.
+        # android talks directly to the mobile Innertube API and returns itag=18 (360p progressive,
+        # always works without PO Token) as well as high-quality DASH format listings (720p, 1080p).
+        # missing_pot: tells yt-dlp to include DASH formats even if PO Token is missing.
+        # When authenticated session cookies are present, yt-dlp requests allow unrestricted downloads.
         if platform == 'youtube':
-            yt_args = {
-                'player_skip': ['webpage', 'configs'],
-                'player_client': ['android'],
+            ydl_opts['extractor_args'] = {
+                'youtube': {
+                    'player_skip': ['webpage', 'configs'],
+                    'player_client': ['android'],
+                    'formats': ['missing_pot'],
+                }
             }
-            if youtube_po_token:
-                yt_args['po_token'] = [f'android.gvs+{youtube_po_token}']
-                print('[EXTRACT_VIDEO] YouTube: using supplied android GVS PO token', flush=True)
-            else:
-                yt_args['formats'] = ['missing_pot']
-                print('[EXTRACT_VIDEO] YouTube: no PO token supplied, using android missing_pot path', flush=True)
-            ydl_opts['extractor_args'] = {'youtube': yt_args}
         elif platform == 'facebook':
             # For Facebook: allow best video + audio or best standalone format or image
             ydl_opts['format'] = 'bestvideo*+bestaudio/best[ext=mp4]/best/bestvideo/bestaudio/image/all'
