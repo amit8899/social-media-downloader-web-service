@@ -1,3 +1,16 @@
 {
-  "enable_supported_sites_check": false
+  "enable_supported_sites_check": true,
+  "supported_sites": [
+    "instagram",
+    "facebook",
+    "fb.watch",
+    "fb.com",
+    "tiktok",
+    "twitter",
+    "x.com",
+    "likee",
+    "sharechat",
+    "roposo",
+    "snackvideo"
+  ]
 }
