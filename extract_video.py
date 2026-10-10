@@ -232,28 +232,45 @@ try:
             fmt_type = str(d.get('format') or '').lower()
 
             if 'm3u8' in video_url or fmt_type == 'hls':
+                actual_tbr = None
+                actual_fps = None
                 try:
-                    m3u8_fmts = self._extract_m3u8_formats(
-                        video_url, video_id, 'mp4', entry_protocol='m3u8_native',
-                        m3u8_id=f'{h}p' if h else 'hls', fatal=False)
-                    for mf in m3u8_fmts:
-                        mf_url = mf.get('url')
-                        if mf_url and mf_url not in formats_set:
-                            formats_set.add(mf_url)
-                            if h and not mf.get('height'):
-                                mf['height'] = h
-                            formats.append(mf)
-                except Exception:
+                    m_req = urllib.request.Request(
+                        video_url,
+                        headers={
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+                            'Accept': '*/*',
+                            'Referer': f'https://www.{host}/',
+                        }
+                    )
+                    with urllib.request.urlopen(m_req, context=ctx, timeout=8) as m_resp:
+                        m3u8_text = m_resp.read().decode('utf-8', errors='ignore')
+                        m_bw = re.search(r'BANDWIDTH=(\d+)', m3u8_text)
+                        if m_bw:
+                            actual_tbr = int(m_bw.group(1)) / 1000.0
+                        m_fps = re.search(r'FRAME-RATE=([\d.]+)', m3u8_text)
+                        if m_fps:
+                            try:
+                                actual_fps = float(m_fps.group(1))
+                            except Exception:
+                                pass
+                except Exception as m_err:
                     pass
+
                 if video_url not in formats_set:
                     formats_set.add(video_url)
-                    formats.append({
+                    fmt_item = {
                         'url': video_url,
                         'format_id': f'{h}p-hls' if h else 'hls',
                         'height': h,
                         'ext': 'mp4',
                         'protocol': 'm3u8_native',
-                    })
+                    }
+                    if actual_tbr:
+                        fmt_item['tbr'] = actual_tbr
+                    if actual_fps:
+                        fmt_item['fps'] = actual_fps
+                    formats.append(fmt_item)
             else:
                 if video_url not in formats_set:
                     formats_set.add(video_url)
