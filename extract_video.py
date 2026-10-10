@@ -243,6 +243,17 @@ try:
             except Exception as e:
                 print(f"[EXTRACT_VIDEO] Error parsing flashvars: {e}", flush=True)
 
+        # 4b. Check thumbnailUrl / imageUrl JSON fields if thumbnail still missing
+        if not thumbnail:
+            m_thumb = re.search(r'"thumbnailUrl"\s*:\s*"([^"]+)"', webpage, flags=re.I)
+            if m_thumb:
+                thumbnail = m_thumb.group(1).replace(r'\/', '/')
+            else:
+                m_img = re.search(r'"imageUrl"\s*:\s*"([^"]+)"', webpage, flags=re.I)
+                if m_img:
+                    thumbnail = m_img.group(1).replace(r'\/', '/')
+
+
         # 5. Last resort: <h1 class="title"> only if not bogus
         if not title or _is_bogus_ph_title(title):
             m_h1 = re.search(r'(?s)<h1[^>]+class=["\']title["\'][^>]*>(?P<title>.+?)</h1>', webpage)
