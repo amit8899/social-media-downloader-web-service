@@ -234,9 +234,11 @@ try:
             if 'm3u8' in video_url or fmt_type == 'hls':
                 actual_tbr = None
                 actual_fps = None
+                master_url = video_url.replace('/index.m3u8', '/master.m3u8') if '/index.m3u8' in video_url else video_url
+                media_url = video_url if '/index.m3u8' in video_url else None
                 try:
                     m_req = urllib.request.Request(
-                        video_url,
+                        master_url,
                         headers={
                             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
                             'Accept': '*/*',
@@ -256,6 +258,29 @@ try:
                                 pass
                 except Exception as m_err:
                     pass
+
+                if not actual_tbr:
+                    m_k = re.search(r'_(\d+)K_', video_url)
+                    if m_k:
+                        actual_tbr = float(m_k.group(1))
+
+                if (not duration or duration <= 0) and media_url:
+                    try:
+                        idx_req = urllib.request.Request(
+                            media_url,
+                            headers={
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+                                'Accept': '*/*',
+                                'Referer': f'https://www.{host}/',
+                            }
+                        )
+                        with urllib.request.urlopen(idx_req, context=ctx, timeout=8) as idx_resp:
+                            idx_text = idx_resp.read().decode('utf-8', errors='ignore')
+                            inf_durs = re.findall(r'#EXTINF:([\d.]+)', idx_text)
+                            if inf_durs:
+                                duration = sum([float(x) for x in inf_durs])
+                    except Exception:
+                        pass
 
                 if video_url not in formats_set:
                     formats_set.add(video_url)
@@ -285,10 +310,18 @@ try:
             r'(?s)From:&nbsp;.+?<(?:a\b[^>]+\bhref=["\']/(?:(?:user|channel)s|model|pornstar)/|span\b[^>]+\bclass=["\']username)[^>]+>(.+?)<',
             webpage, 'uploader', default=None)
 
+        if title:
+            import html as py_html
+            title = py_html.unescape(title).strip()
+            if not title or title.lower() in ('by', '&nbsp;by&nbsp;') or title.startswith('&nbsp;'):
+                title = f'PornHub_{video_id}'
+        else:
+            title = f'PornHub_{video_id}'
+
         return {
             'id': video_id,
             'uploader': uploader,
-            'title': title or f'PornHub_{video_id}',
+            'title': title,
             'thumbnail': thumbnail,
             'duration': duration,
             'formats': formats,
