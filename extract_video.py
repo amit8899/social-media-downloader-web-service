@@ -163,12 +163,27 @@ try:
             error_msg = re.sub(r'\s+', ' ', error_msg)
             raise ExtractorError(f'PornHub said: {error_msg}', expected=True, video_id=video_id)
 
-        title = self._html_search_meta(
-            'twitter:title', webpage, default=None) or self._html_search_regex(
-            (r'(?s)<h1[^>]+class=["\']title["\'][^>]*>(?P<title>.+?)</h1>',
-             r'<div[^>]+data-video-title=(["\'])(?P<title>(?:(?!\1).)+)\1',
-             r'shareTitle["\']\s*[=:]\s*(["\'])(?P<title>(?:(?!\1).)+)\1'),
-            webpage, 'title', default=None, group='title')
+        title = self._html_search_meta('twitter:title', webpage, default=None)
+        if not title:
+            m_h1 = re.search(r'(?s)<h1[^>]+class=["\']title["\'][^>]*>(?P<title>.+?)</h1>', webpage)
+            if m_h1:
+                cand = re.sub(r'<[^>]+>', '', m_h1.group('title')).strip()
+                import html as py_html
+                cand = py_html.unescape(cand).strip()
+                if cand and cand.lower() not in ('by', '&nbsp;by&nbsp;') and not cand.lower().startswith('by '):
+                    title = cand
+        if not title:
+            title = self._html_search_regex(
+                (r'<div[^>]+data-video-title=(["\'])(?P<title>(?:(?!\1).)+)\1',
+                 r'shareTitle["\']\s*[=:]\s*(["\'])(?P<title>(?:(?!\1).)+)\1',
+                 r'<title>(?P<title>[^<]+)</title>'),
+                webpage, 'title', default=None, group='title')
+            if title:
+                import html as py_html
+                title = py_html.unescape(title).strip()
+                title = re.sub(r'\s*-\s*Pornhub.*$', '', title, flags=re.I).strip()
+                if title.lower() in ('by', '&nbsp;by&nbsp;', 'pornhub') or title.lower().startswith('by '):
+                    title = None
 
         media_definitions = []
         duration = None
@@ -179,8 +194,12 @@ try:
         if m_clips:
             try:
                 clips_data = json.loads(m_clips.group(1))
-                if not title:
-                    title = clips_data.get('videoTitle')
+                vt = clips_data.get('videoTitle')
+                if vt and vt.strip():
+                    import html as py_html
+                    vt_clean = py_html.unescape(vt).strip()
+                    if vt_clean.lower() not in ('by', '&nbsp;by&nbsp;') and not vt_clean.lower().startswith('by '):
+                        title = vt_clean
                 duration = int_or_none(clips_data.get('videoDuration'))
                 thumbnail = clips_data.get('posterUrl')
                 defs = clips_data.get('mediaDefinition') or clips_data.get('mediaDefinitions') or []
@@ -194,8 +213,12 @@ try:
         if m_flash:
             try:
                 flashvars = json.loads(m_flash.group(1))
-                if not title:
-                    title = flashvars.get('video_title')
+                vt = flashvars.get('video_title')
+                if (not title or title.lower() in ('by', '&nbsp;by&nbsp;') or title.lower().startswith('by ')) and vt and vt.strip():
+                    import html as py_html
+                    vt_clean = py_html.unescape(vt).strip()
+                    if vt_clean.lower() not in ('by', '&nbsp;by&nbsp;') and not vt_clean.lower().startswith('by '):
+                        title = vt_clean
                 if not duration:
                     duration = int_or_none(flashvars.get('video_duration'))
                 if not thumbnail:

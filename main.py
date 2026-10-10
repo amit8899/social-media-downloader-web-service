@@ -108,7 +108,7 @@ async def root():
 
 EXTRACTOR_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "extract_video.py")
 FACEBOOK_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "facebook_updated.py")
-EXTRACTOR_VERSION = int(os.getenv("EXTRACTOR_VERSION", "21"))
+EXTRACTOR_VERSION = int(os.getenv("EXTRACTOR_VERSION", "22"))
 
 @app.get("/api/extractors/latest")
 async def get_latest_extractor():
