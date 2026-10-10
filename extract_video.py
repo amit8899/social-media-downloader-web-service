@@ -163,43 +163,60 @@ try:
             error_msg = re.sub(r'\s+', ' ', error_msg)
             raise ExtractorError(f'PornHub said: {error_msg}', expected=True, video_id=video_id)
 
-        title = self._html_search_meta('twitter:title', webpage, default=None)
-        if not title:
-            m_h1 = re.search(r'(?s)<h1[^>]+class=["\']title["\'][^>]*>(?P<title>.+?)</h1>', webpage)
-            if m_h1:
-                cand = re.sub(r'<[^>]+>', '', m_h1.group('title')).strip()
-                import html as py_html
-                cand = py_html.unescape(cand).strip()
-                if cand and cand.lower() not in ('by', '&nbsp;by&nbsp;') and not cand.lower().startswith('by '):
+        def _clean_ph_title(raw):
+            if not raw:
+                return ''
+            import html as py_html
+            t = py_html.unescape(raw)
+            t = t.replace('\u00a0', ' ').replace('&nbsp;', ' ')
+            t = re.sub(r'\s+', ' ', t).strip()
+            return t
+
+        def _is_bogus_ph_title(raw):
+            if not raw:
+                return True
+            norm = _clean_ph_title(raw).lower()
+            return not norm or norm in ('by', 'pornhub', 'shorties', 'video', 'pornhub video') or norm.startswith('by ')
+
+        title = None
+
+        # 1. Check og:title and twitter:title meta tags
+        for meta_name in ('og:title', 'twitter:title'):
+            cand = self._html_search_meta(meta_name, webpage, default=None)
+            if cand:
+                cand = _clean_ph_title(cand)
+                cand = re.sub(r'\s*-\s*Shorties\s*-\s*Pornhub.*$', '', cand, flags=re.I).strip()
+                cand = re.sub(r'\s*-\s*Pornhub.*$', '', cand, flags=re.I).strip()
+                if not _is_bogus_ph_title(cand):
                     title = cand
-        if not title:
-            title = self._html_search_regex(
-                (r'<div[^>]+data-video-title=(["\'])(?P<title>(?:(?!\1).)+)\1',
-                 r'shareTitle["\']\s*[=:]\s*(["\'])(?P<title>(?:(?!\1).)+)\1',
-                 r'<title>(?P<title>[^<]+)</title>'),
+                    break
+
+        # 2. Check <title> and data-video-title
+        if not title or _is_bogus_ph_title(title):
+            cand = self._html_search_regex(
+                (r'<title>(?P<title>[^<]+)</title>',
+                 r'<div[^>]+data-video-title=(["\'])(?P<title>(?:(?!\1).)+)\1',
+                 r'shareTitle["\']\s*[=:]\s*(["\'])(?P<title>(?:(?!\1).)+)\1'),
                 webpage, 'title', default=None, group='title')
-            if title:
-                import html as py_html
-                title = py_html.unescape(title).strip()
-                title = re.sub(r'\s*-\s*Pornhub.*$', '', title, flags=re.I).strip()
-                if title.lower() in ('by', '&nbsp;by&nbsp;', 'pornhub') or title.lower().startswith('by '):
-                    title = None
+            if cand:
+                cand = _clean_ph_title(cand)
+                cand = re.sub(r'\s*-\s*Shorties\s*-\s*Pornhub.*$', '', cand, flags=re.I).strip()
+                cand = re.sub(r'\s*-\s*Pornhub.*$', '', cand, flags=re.I).strip()
+                if not _is_bogus_ph_title(cand):
+                    title = cand
 
         media_definitions = []
         duration = None
         thumbnail = None
 
-        # 1. Parse CLIPS_DATA (modern player layout)
+        # 3. Parse CLIPS_DATA (modern player layout)
         m_clips = re.search(r'var\s+CLIPS_DATA\s*=\s*({.+?});', webpage)
         if m_clips:
             try:
                 clips_data = json.loads(m_clips.group(1))
-                vt = clips_data.get('videoTitle')
-                if vt and vt.strip():
-                    import html as py_html
-                    vt_clean = py_html.unescape(vt).strip()
-                    if vt_clean.lower() not in ('by', '&nbsp;by&nbsp;') and not vt_clean.lower().startswith('by '):
-                        title = vt_clean
+                vt = _clean_ph_title(clips_data.get('videoTitle') or clips_data.get('title'))
+                if (not title or _is_bogus_ph_title(title)) and not _is_bogus_ph_title(vt):
+                    title = vt
                 duration = int_or_none(clips_data.get('videoDuration'))
                 thumbnail = clips_data.get('posterUrl')
                 defs = clips_data.get('mediaDefinition') or clips_data.get('mediaDefinitions') or []
@@ -208,17 +225,14 @@ try:
             except Exception as e:
                 print(f"[EXTRACT_VIDEO] Error parsing CLIPS_DATA: {e}", flush=True)
 
-        # 2. Parse flashvars (legacy player layout)
+        # 4. Parse flashvars (legacy player layout)
         m_flash = re.search(r'var\s+flashvars_\d+\s*=\s*({.+?});', webpage)
         if m_flash:
             try:
                 flashvars = json.loads(m_flash.group(1))
-                vt = flashvars.get('video_title')
-                if (not title or title.lower() in ('by', '&nbsp;by&nbsp;') or title.lower().startswith('by ')) and vt and vt.strip():
-                    import html as py_html
-                    vt_clean = py_html.unescape(vt).strip()
-                    if vt_clean.lower() not in ('by', '&nbsp;by&nbsp;') and not vt_clean.lower().startswith('by '):
-                        title = vt_clean
+                vt = _clean_ph_title(flashvars.get('video_title') or flashvars.get('title'))
+                if (not title or _is_bogus_ph_title(title)) and not _is_bogus_ph_title(vt):
+                    title = vt
                 if not duration:
                     duration = int_or_none(flashvars.get('video_duration'))
                 if not thumbnail:
@@ -228,6 +242,14 @@ try:
                     media_definitions.extend(defs)
             except Exception as e:
                 print(f"[EXTRACT_VIDEO] Error parsing flashvars: {e}", flush=True)
+
+        # 5. Last resort: <h1 class="title"> only if not bogus
+        if not title or _is_bogus_ph_title(title):
+            m_h1 = re.search(r'(?s)<h1[^>]+class=["\']title["\'][^>]*>(?P<title>.+?)</h1>', webpage)
+            if m_h1:
+                cand = _clean_ph_title(re.sub(r'<[^>]+>', '', m_h1.group('title')))
+                if not _is_bogus_ph_title(cand):
+                    title = cand
 
         # 3. Direct regex fallback for mediaDefinition
         if not media_definitions:
@@ -333,13 +355,10 @@ try:
             r'(?s)From:&nbsp;.+?<(?:a\b[^>]+\bhref=["\']/(?:(?:user|channel)s|model|pornstar)/|span\b[^>]+\bclass=["\']username)[^>]+>(.+?)<',
             webpage, 'uploader', default=None)
 
-        if title:
-            import html as py_html
-            title = py_html.unescape(title).strip()
-            if not title or title.lower() in ('by', '&nbsp;by&nbsp;') or title.startswith('&nbsp;'):
-                title = f'PornHub_{video_id}'
-        else:
+        if not title or _is_bogus_ph_title(title):
             title = f'PornHub_{video_id}'
+        else:
+            title = _clean_ph_title(title)
 
         return {
             'id': video_id,
